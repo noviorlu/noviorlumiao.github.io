@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transformer 算力与显存计算器</title>
+<style>
+  :root{
+    --bg:#fbfbfa; --panel:#fff; --ink:#1a1a1a; --muted:#6b6b6b; --line:#e4e4e1;
+    --accent:#2f6f4e; --accent-soft:#e8f2ec; --warn:#a4522c; --warn-soft:#fbeee6;
+    --code:#f4f4f2; --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#16171a; --panel:#1e2024; --ink:#e6e6e4; --muted:#9a9a97; --line:#2e3138;
+      --accent:#7cc3a0; --accent-soft:#1e2c26; --warn:#d99a72; --warn-soft:#2c231d;
+      --code:#25272c;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC",sans-serif;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:32px 20px 80px}
+  header h1{font-size:26px; margin:0 0 6px; letter-spacing:-.2px}
+  header p{color:var(--muted); margin:0 0 4px; max-width:70ch}
+  header .src{font-size:13px; color:var(--muted)}
+  .layout{display:grid; grid-template-columns:290px 1fr; gap:26px; margin-top:26px; align-items:start}
+  @media (max-width:900px){ .layout{grid-template-columns:1fr} }
+
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px}
+  .sticky{position:sticky; top:20px}
+  @media (max-width:900px){ .sticky{position:static} }
+  h2{font-size:15px; margin:0 0 14px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted)}
+  h3{font-size:16px; margin:30px 0 10px}
+  h3:first-of-type{margin-top:0}
+
+  .presets{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px}
+  .presets button{
+    font:12px/1 var(--mono); padding:7px 10px; cursor:pointer; color:var(--ink);
+    background:var(--code); border:1px solid var(--line); border-radius:6px;
+  }
+  .presets button:hover{border-color:var(--accent); color:var(--accent)}
+
+  .field{display:grid; grid-template-columns:1fr 92px; gap:8px; align-items:center; margin-bottom:9px}
+  .field label{font-size:13px}
+  .field label small{display:block; color:var(--muted); font:11px/1.3 var(--mono)}
+  .field input,.field select{
+    width:100%; padding:6px 8px; font:13px var(--mono); text-align:right;
+    background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:5px;
+  }
+  .field select{text-align:left}
+  .field input:focus,.field select:focus{outline:2px solid var(--accent); outline-offset:-1px}
+  .chk{display:flex; gap:7px; align-items:center; font-size:13px; margin:2px 0 12px; color:var(--muted)}
+
+  table{width:100%; border-collapse:collapse; font-size:13.5px}
+  .scroll{overflow-x:auto; -webkit-overflow-scrolling:touch}
+  th,td{padding:7px 10px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{font-weight:600; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.03em}
+  tr.total td{font-weight:700; border-top:2px solid var(--line); border-bottom:none}
+  td.f,th.f{font-family:var(--mono); font-size:12.5px; color:var(--muted); text-align:left}
+  tbody tr:hover{background:var(--code)}
+
+  .eq{
+    font:13px/1.9 var(--mono); background:var(--code); border:1px solid var(--line);
+    border-left:3px solid var(--accent); border-radius:6px; padding:11px 14px; margin:10px 0;
+    overflow-x:auto; white-space:pre;
+  }
+  .eq b{color:var(--accent); font-weight:600}
+  .note{font-size:13.5px; color:var(--muted); margin:10px 0}
+  .note b{color:var(--ink)}
+
+  .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:14px 0}
+  .kpi{background:var(--code); border:1px solid var(--line); border-radius:8px; padding:11px 13px}
+  .kpi .k{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em}
+  .kpi .v{font:18px/1.35 var(--mono); font-weight:600; margin-top:3px}
+  .kpi .s{font:11px var(--mono); color:var(--muted)}
+
+  .bar{display:flex; height:26px; border-radius:5px; overflow:hidden; margin:12px 0 6px; border:1px solid var(--line)}
+  .bar span{display:flex; align-items:center; justify-content:center; font:11px var(--mono); color:#fff; overflow:hidden}
+  .legend{display:flex; flex-wrap:wrap; gap:14px; font-size:12px; color:var(--muted)}
+  .legend i{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px}
+
+  .tag{display:inline-block; padding:1px 7px; border-radius:4px; font:11px var(--mono); font-weight:600}
+  .tag.ok{background:var(--accent-soft); color:var(--accent)}
+  .tag.bad{background:var(--warn-soft); color:var(--warn)}
+  footer{margin-top:44px; padding-top:18px; border-top:1px solid var(--line); font-size:13px; color:var(--muted)}
+  code{font:12.5px var(--mono); background:var(--code); padding:1px 5px; border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Transformer 算力与显存计算器</h1>
+  <p>把一个 Transformer LM 的参数量、前向 FLOPs、训练一步的显存和时间从头数一遍。每一项都写出符号公式，再代入当前配置。</p>
+  <p class="src">架构对应 CS336 Assignment 1：pre-norm、RMSNorm、SwiGLU、RoPE、无 weight tying、无 bias。</p>
+</header>
+
+<div class="layout">
+
+  <!-- ── 输入 ── -->
+  <aside class="panel sticky">
+    <h2>配置</h2>
+    <div class="presets" id="presets"></div>
+
+    <div class="field"><label>vocab_size <small>V</small></label><input id="V" type="number" value="50257"></div>
+    <div class="field"><label>context_length <small>T</small></label><input id="T" type="number" value="1024"></div>
+    <div class="field"><label>num_layers <small>L</small></label><input id="L" type="number" value="48"></div>
+    <div class="field"><label>d_model <small>d</small></label><input id="d" type="number" value="1600"></div>
+    <div class="field"><label>num_heads <small>h</small></label><input id="h" type="number" value="25"></div>
+    <div class="field"><label>d_ff</label><input id="dff" type="number" value="4288"></div>
+    <label class="chk"><input type="checkbox" id="autoff"> d_ff 自动取 (8/3)d 对齐到 64</label>
+    <div class="field"><label>batch_size <small>B</small></label><input id="B" type="number" value="1"></div>
+
+    <h2 style="margin-top:22px">硬件</h2>
+    <div class="field"><label>每个数几字节 <small>bytes</small></label>
+      <select id="bpe"><option value="4">fp32 · 4</option><option value="2">bf16/fp16 · 2</option></select></div>
+    <div class="field"><label>显存 <small>GB</small></label><input id="vram" type="number" value="80"></div>
+    <div class="field"><label>峰值算力 <small>TFLOP/s</small></label><input id="peak" type="number" value="495"></div>
+    <div class="field"><label>显存带宽 <small>TB/s</small></label><input id="bw" type="number" value="3.35" step="0.01"></div>
+    <div class="field"><label>MFU <small>0–1</small></label><input id="mfu" type="number" value="0.5" step="0.05"></div>
+    <div class="field"><label>训练步数 <small>steps</small></label><input id="steps" type="number" value="400000"></div>
+  </aside>
+
+  <!-- ── 输出 ── -->
+  <main>
+
+    <div class="panel">
+      <h3>一、参数量与权重显存</h3>
+      <div class="eq">P = <b>2·V·d</b> + L·(<b>4·d²</b> + <b>3·d·d_ff</b> + <b>2·d</b>) + <b>d</b>
+  ≈ 2·V·d + 12·L·d²      ← 每层 4d²(attn) + 8d²(ffn) = 12d²</div>
+      <div class="scroll"><table id="tParams"></table></div>
+      <p class="note"><b>embedding 和 lm_head 各占一份 V·d</b>——本作业不做 weight tying，所以 V·d 要算两次。
+      但 FLOPs 里只算一次（embedding 是查表，0 FLOPs），这个不对称在第五段的横向对比里是关键。</p>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <h3>二、一次 forward 的 FLOPs</h3>
+      <div class="eq">矩阵乘 A(m×n) @ B(n×p)  =  <b>2·m·n·p</b> FLOPs     每个输出元素 = 长度 n 的点积 = n 乘 + n 加
+推论：x[T,d_in] @ W[d_in,d_out]  =  <b>2 · token数 · 参数量</b>     数完参数量就等于数完了 FLOPs</div>
+      <div class="scroll"><table id="tFlops"></table></div>
+      <div class="eq">每层 = <b>8·T·d²</b> + <b>4·T²·d</b> + <b>6·T·d·d_ff</b>
+总计 = L·每层 + <b>2·T·d·V</b>（lm_head）</div>
+      <p class="note">整张表里只有 <code>Q@K^T</code> 和 <code>scores@V</code> 让 T 出现两次——<b>那是 T² 的唯一来源</b>。
+      头数 h 在这两项里被消掉了，因为 h·d_k = d 恒成立。</p>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <h3>三、四大块的占比</h3>
+      <div class="bar" id="barFlops"></div>
+      <div class="legend" id="legFlops"></div>
+      <div class="scroll" style="margin-top:14px"><table id="tBlocks"></table></div>
+      <p class="note" id="blockNote"></p>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <h3>四、从一次前向推到一步训练</h3>
+      <div class="eq">反向 ≈ 2 × 前向     每个权重矩阵反向要算两次：对输入的梯度 + 对权重的梯度
+<b>一步训练 ≈ 3 × 一次前向</b>
+AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开方、除法、累加</div>
+      <div class="kpis" id="kStep"></div>
+      <p class="note"><b>优化器的算力可以忽略</b>，它的代价全在显存上。AdamW 贵在 2× 的状态，不贵在计算。</p>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <h3>五、显存：4P 是地板，激活值是天花板</h3>
+      <div class="eq">固定部分 = <b>4P</b>     参数(P) + 梯度(P) + AdamW 的 m、v(2P)
+
+每层激活 = <b>8·B·T·d</b> + <b>2·B·h·T²</b> + <b>4·B·T·d_ff</b>
+           两个 norm      QK^T 和 softmax   SwiGLU 四个中间量
+           + QKV 投影 + 加权求和 + 输出投影
+
+A = L·(每层) + <b>B·T·d</b> + <b>2·B·T·V</b>      出口的 norm、logits、cross-entropy
+<b>Mem = bytes · (4P + A)</b></div>
+      <div class="kpis" id="kMem"></div>
+      <div class="bar" id="barAct"></div>
+      <div class="legend" id="legAct"></div>
+      <div class="scroll" style="margin-top:14px"><table id="tAct"></table></div>
+      <p class="note" id="actNote"></p>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <h3>六、FLOPs 占比 ≠ 时间占比：arithmetic intensity</h3>
+      <div class="eq">AI = FLOPs / 从显存搬运的字节数        [FLOP/byte]
+机器平衡点 = 峰值算力 / 显存带宽
+AI &gt; 平衡点 → compute-bound（算力吃满）    AI &lt; 平衡点 → memory-bound（在等数据）</div>
+      <p class="note" id="aiDtype"></p>
+      <div class="scroll"><table id="tAI"></table></div>
+      <p class="note" id="aiNote"></p>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <h3>七、训完要多久</h3>
+      <div class="eq">总量 = <b>3 × 前向FLOPs × B × steps</b>
+耗时 = 总量 / (峰值算力 × MFU)</div>
+      <div class="kpis" id="kTime"></div>
+      <p class="note" id="timeNote"></p>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <h3>八、上下文拉长会发生什么</h3>
+      <p class="note">FLOPs 里只有注意力打分是 T 的平方项，其余都是线性。所以 T 一长，占比结构会翻转。
+      交叉点（线性项 = 平方项）：<code>T* = V/(2L) + 6·d ≈ 6·d_model</code></p>
+      <div class="scroll"><table id="tScale"></table></div>
+      <p class="note" id="scaleNote"></p>
+    </div>
+
+  </main>
+</div>
+
+<footer>
+  公式与数字对应 CS336 Assignment 1 的 <code>transformer_accounting</code> 与 <code>adamw_accounting</code>。
+  显存与 FLOPs 均按十进制单位（1 GB = 10⁹ B，1 TFLOP = 10¹² FLOP）。
+</footer>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const IN = ["V","T","L","d","h","dff","B","bpe","vram","peak","bw","mfu","steps"];
+const PRESETS = {
+  "GPT-2 small":  {V:50257,T:1024,L:12,d:768, h:12,dff:2048},
+  "GPT-2 medium": {V:50257,T:1024,L:24,d:1024,h:16,dff:2752},
+  "GPT-2 large":  {V:50257,T:1024,L:36,d:1280,h:20,dff:3392},
+  "GPT-2 XL":     {V:50257,T:1024,L:48,d:1600,h:25,dff:4288},
+  "作业默认":      {V:10000,T:256, L:4, d:512, h:16,dff:1344},
+  "Llama-3-8B":   {V:128256,T:8192,L:32,d:4096,h:32,dff:14336},
+};
+const COLORS = ["#3d7f5e","#5f9ea0","#c08552","#8a7aa8","#b0563f"];
+
+const fmt = (n,p=2) => n.toLocaleString("en-US",{minimumFractionDigits:p,maximumFractionDigits:p});
+const int = n => Math.round(n).toLocaleString("en-US");
+const pct = x => (x*100).toFixed(2)+"%";
+function bytes(b){
+  if(b>=1e9) return fmt(b/1e9)+" GB";
+  if(b>=1e6) return fmt(b/1e6)+" MB";
+  if(b>=1e3) return fmt(b/1e3)+" KB";
+  return int(b)+" B";
+}
+function flops(f){
+  if(f>=1e21) return fmt(f/1e21)+" ZFLOPs";
+  if(f>=1e15) return fmt(f/1e15)+" PFLOPs";
+  if(f>=1e12) return fmt(f/1e12)+" TFLOPs";
+  if(f>=1e9)  return fmt(f/1e9)+" GFLOPs";
+  return int(f)+" FLOPs";
+}
+function dur(s){
+  if(s<3600) return fmt(s/60,1)+" 分钟";
+  const h=s/3600;
+  if(h<48) return fmt(h,1)+" 小时";
+  return fmt(h/24,1)+" 天（"+int(h)+" 小时）";
+}
+function tbl(el, head, rows, totalRow){
+  let H = "<thead><tr>" + head.map((c,i)=>`<th class="${i===1?'f':''}">${c}</th>`).join("") + "</tr></thead><tbody>";
+  H += rows.map(r=>"<tr>"+r.map((c,i)=>`<td class="${i===1?'f':''}">${c}</td>`).join("")+"</tr>").join("");
+  if(totalRow) H += "<tr class='total'>"+totalRow.map((c,i)=>`<td class="${i===1?'f':''}">${c}</td>`).join("")+"</tr>";
+  el.innerHTML = H + "</tbody>";
+}
+function stack(barEl, legEl, items){
+  const tot = items.reduce((a,b)=>a+b.v,0) || 1;
+  barEl.innerHTML = items.map((it,i)=>{
+    const w = it.v/tot*100;
+    return `<span style="width:${w}%;background:${COLORS[i%COLORS.length]}">${w>9?w.toFixed(1)+"%":""}</span>`;
+  }).join("");
+  legEl.innerHTML = items.map((it,i)=>
+    `<span><i style="background:${COLORS[i%COLORS.length]}"></i>${it.k} ${(it.v/tot*100).toFixed(1)}%</span>`).join("");
+}
+
+// ── 核心：所有公式都在这里 ──────────────────────────────
+function compute(p){
+  const {V,T,L,d,h,dff,B,bpe} = p;
+
+  // 参数量
+  const emb = V*d, lmh = d*V, attn = 4*d*d, ffn = 3*d*dff, norms = 2*d;
+  const P = emb + L*(attn+ffn+norms) + d + lmh;
+
+  // 一次 forward 的 FLOPs
+  const f_proj1 = 2*T*d*d;                 // 每个投影
+  const f_score = 2*T*T*d;                 // Q@K^T 或 scores@V
+  const f_ff1   = 2*T*d*dff;               // 每个 FFN 矩阵
+  const perLayer = 8*T*d*d + 4*T*T*d + 6*T*d*dff;
+  const f_lm    = 2*T*d*V;
+  const F = L*perLayer + f_lm;
+
+  // 四大块
+  const blocks = [
+    {k:"FFN",              sym:"2·T·(3·d·d_ff)·L",  v:L*6*T*d*dff},
+    {k:"Attention 投影",    sym:"2·T·(4·d²)·L",      v:L*8*T*d*d},
+    {k:"Attention 打分",    sym:"4·L·T²·d",          v:L*4*T*T*d},
+    {k:"lm_head",          sym:"2·T·d·V",           v:f_lm},
+  ];
+
+  // 显存
+  const a_norm = 8*B*T*d, a_score = 2*B*h*T*T, a_ff = 4*B*T*dff;
+  const A = L*(a_norm + a_score + a_ff) + B*T*d + 2*B*T*V;
+  const memFixed = bpe*4*P, memAct = bpe*A;
+
+  // arithmetic intensity（按 bpe 字节/元素，假设每个张量过一次 HBM）
+  const ai = [
+    {k:"投影 x@W",  sym:"T·d / (2T+d)",                  f:2*T*d*d,   b:bpe*(2*T*d + d*d),
+     v: T*d/(2*T+d)},
+    {k:"FFN x@W1",  sym:"T·d·d_ff / (T·d + d·d_ff + T·d_ff)", f:2*T*d*dff, b:bpe*(T*d + d*dff + T*dff),
+     v: T*d*dff/(T*d + d*dff + T*dff)},
+    {k:"打分 Q@K^T",sym:"T·d / (2d + h·T)",              f:2*T*T*d,   b:bpe*(2*T*d + h*T*T),
+     v: T*d/(2*d + h*T)},
+  ];
+
+  return {P, emb, lmh, attn, ffn, norms, F, perLayer, f_lm, f_proj1, f_score, f_ff1,
+          blocks, A, a_norm, a_score, a_ff, memFixed, memAct, ai};
+}
+
+function render(){
+  const p = {};
+  IN.forEach(k => p[k] = parseFloat($(k).value) || 0);
+  if($("autoff").checked){ p.dff = Math.round(8/3*p.d/64)*64; $("dff").value = p.dff; }
+  const {V,T,L,d,h,dff,B,bpe} = p;
+  const r = compute(p);
+
+  // 一、参数量
+  tbl($("tParams"),
+    ["组件","符号","参数量","显存","占比"],
+    [
+      ["token_embeddings","V·d",           int(r.emb),        bytes(bpe*r.emb),        pct(r.emb/r.P)],
+      ["q/k/v/output_proj","4·d² × L",     int(L*r.attn),     bytes(bpe*L*r.attn),     pct(L*r.attn/r.P)],
+      ["w1/w2/w3","3·d·d_ff × L",          int(L*r.ffn),      bytes(bpe*L*r.ffn),      pct(L*r.ffn/r.P)],
+      ["ln1/ln2","2·d × L",                int(L*r.norms),    bytes(bpe*L*r.norms),    pct(L*r.norms/r.P)],
+      ["ln_final","d",                     int(d),            bytes(bpe*d),            pct(d/r.P)],
+      ["lm_head","d·V",                    int(r.lmh),        bytes(bpe*r.lmh),        pct(r.lmh/r.P)],
+    ],
+    ["总计 P","2·V·d + L·(4d²+3d·d_ff+2d) + d", int(r.P), bytes(bpe*r.P), "100%"]);
+
+  // 二、FLOPs
+  const rows = [
+    ["MHA · x@Wq","2·T·d²",     flops(r.f_proj1)],
+    ["MHA · x@Wk","2·T·d²",     flops(r.f_proj1)],
+    ["MHA · x@Wv","2·T·d²",     flops(r.f_proj1)],
+    ["MHA · Q@K^T","2·T²·d",    flops(r.f_score)],
+    ["MHA · scores@V","2·T²·d", flops(r.f_score)],
+    ["MHA · o@Wo","2·T·d²",     flops(r.f_proj1)],
+    ["FFN · x@W1","2·T·d·d_ff", flops(r.f_ff1)],
+    ["FFN · x@W3","2·T·d·d_ff", flops(r.f_ff1)],
+    ["FFN · x@W2","2·T·d·d_ff", flops(r.f_ff1)],
+  ].map(x=>[x[0],x[1],x[2],pct(({"MHA · Q@K^T":r.f_score,"MHA · scores@V":r.f_score}[x[0]] ??
+        (x[0].startsWith("FFN")?r.f_ff1:r.f_proj1))*L/r.F)]);
+  rows.push(["每层小计","8T·d² + 4T²·d + 6T·d·d_ff", flops(r.perLayer), pct(L*r.perLayer/r.F)]);
+  rows.push(["出口 · x@lm_head","2·T·d·V", flops(r.f_lm), pct(r.f_lm/r.F)]);
+  rows.push(["token_embeddings","查表 gather", "0", "0%"]);
+  tbl($("tFlops"), ["在哪","符号 FLOPs","单次","×L 后占总量"], rows,
+      ["一次 forward 总计","L·每层 + 2·T·d·V", flops(r.F), "100%"]);
+
+  // 三、四大块
+  stack($("barFlops"), $("legFlops"), r.blocks.map(b=>({k:b.k, v:b.v})));
+  tbl($("tBlocks"), ["块","符号","FLOPs","占比"],
+      r.blocks.map(b=>[b.k, b.sym, flops(b.v), pct(b.v/r.F)]));
+  const big = r.blocks.reduce((a,b)=>b.v>a.v?b:a);
+  const sc  = r.blocks[2];
+  $("blockNote").innerHTML = `当前配置下最贵的是 <b>${big.k}（${pct(big.v/r.F)}）</b>，`+
+    `而"真正的注意力计算"（激活×激活的那两次）只占 <b>${pct(sc.v/r.F)}</b>。`+
+    `打分与投影的比值是 <code>T/(2d) = ${fmt(T/(2*d),3)}</code>——<b>层数完全约掉了</b>，唯一的自变量是 T/d。`;
+
+  // 四、训练一步
+  const stepF = 3*r.F, optF = 14*r.P;
+  $("kStep").innerHTML = [
+    ["一次 forward","F", flops(r.F)],
+    ["一步训练","3·F", flops(stepF)],
+    ["AdamW 一步","14·P", flops(optF)],
+    ["优化器占比","14P / 3F", pct(optF/stepF)],
+  ].map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v">${k[2]}</div><div class="s">${k[1]}</div></div>`).join("");
+
+  // 五、显存
+  const total = r.memFixed + r.memAct;
+  const vramB = p.vram*1e9;
+  const maxB = Math.floor((vramB - r.memFixed) / (r.memAct/Math.max(B,1)));
+  $("kMem").innerHTML = [
+    ["固定部分 4P","参数+梯度+m+v", bytes(r.memFixed)],
+    [`激活值（B=${int(B)}）`,"bytes·A", bytes(r.memAct)],
+    ["合计","bytes·(4P+A)", bytes(total)],
+    [`${int(p.vram)} GB 能放的 batch`, maxB>0?"⌊(显存−4P)/每样本⌋":"装不下", maxB>0?int(maxB):"0"],
+  ].map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v">${k[2]}</div><div class="s">${k[1]}</div></div>`).join("");
+
+  const acts = [
+    {k:"2·h·T²  打分+softmax", v:L*r.a_score},
+    {k:"4·T·d_ff  SwiGLU",     v:L*r.a_ff},
+    {k:"8·T·d  norm/投影/输出", v:L*r.a_norm},
+    {k:"出口 logits 等",        v:B*T*d + 2*B*T*V},
+  ];
+  stack($("barAct"), $("legAct"), acts);
+  tbl($("tAct"), ["激活项","符号","元素数","占激活"],
+    [
+      ["打分矩阵 + softmax","2·B·h·T² × L", int(L*r.a_score), pct(L*r.a_score/r.A)],
+      ["SwiGLU 四个中间量","4·B·T·d_ff × L", int(L*r.a_ff),   pct(L*r.a_ff/r.A)],
+      ["norm、投影、输出","8·B·T·d × L",    int(L*r.a_norm),  pct(L*r.a_norm/r.A)],
+      ["出口 norm/logits/CE","B·T·d + 2·B·T·V", int(B*T*d+2*B*T*V), pct((B*T*d+2*B*T*V)/r.A)],
+    ],
+    ["合计 A","", int(r.A), "100%"]);
+  const perSample = r.memAct/Math.max(B,1);
+  $("actNote").innerHTML =
+    `单个 batch 元素的激活是 <b>${bytes(perSample)}</b>，权重是 ${bytes(bpe*r.P)}——`+
+    (perSample>bpe*r.P?"<b>激活比全部权重还多</b>。":"")+
+    ` 其中打分矩阵一项占 <b>${pct(L*r.a_score/r.A)}</b>，而它在 FLOPs 上只占 ${pct(r.blocks[2].v/r.F)}。`+
+    ` <b>算力上是配角，显存上是主角</b>——这正是 FlashAttention 不物化 [h,T,T] 的理由。`;
+
+  // 六、AI
+  const balance = p.peak*1e12/(p.bw*1e12);
+  tbl($("tAI"), ["操作","AI 公式","FLOPs","HBM 字节","AI (FLOP/byte)","判定"],
+    r.ai.map(a=>[a.k, a.sym, flops(a.f), bytes(a.b), fmt(a.v,1),
+      a.v>balance?'<span class="tag ok">compute-bound</span>':'<span class="tag bad">memory-bound</span>']));
+  $("aiDtype").innerHTML = `AI 随 dtype 变——搬的字节数不同。当前按 <b>${bpe} 字节/元素</b>算；切到 bf16（2 字节）搬运量减半、AI 翻倍。`;
+  const bad = r.ai.filter(a=>a.v<=balance).map(a=>a.k);
+  $("aiNote").innerHTML = `机器平衡点 = ${fmt(p.peak,0)} TFLOP/s ÷ ${fmt(p.bw,2)} TB/s = <b>${fmt(balance,0)} FLOP/byte</b>。`+
+    (bad.length? ` 掉到平衡点以下的是 <b>${bad.join("、")}</b>——它在等数据而不是在算，占用的墙钟时间远超它的 FLOPs 占比。`
+               : " 当前配置下三项都是 compute-bound。")+
+    ` 解码时 T=1，投影的 AI 降到 <code>d/(2+d) ≈ 1</code>，极度 memory-bound——这是自回归生成慢的根本原因。`;
+
+  // 七、时间
+  const totalF = stepF*B*p.steps, sec = totalF/(p.peak*1e12*p.mfu);
+  $("kTime").innerHTML = [
+    ["总算力","3·F·B·steps", flops(totalF)],
+    ["有效算力",`${fmt(p.peak,0)}×${p.mfu}`, fmt(p.peak*p.mfu,0)+" TFLOP/s"],
+    ["单卡耗时","总量/有效算力", dur(sec)],
+    ["两周训完需要","耗时 / 14 天", fmt(sec/(14*86400),1)+" 张卡"],
+  ].map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v">${k[2]}</div><div class="s">${k[1]}</div></div>`).join("");
+  $("timeNote").innerHTML = maxB>0
+    ? `注意这里假设 batch=${int(B)}，而上面算出单卡最多放 <b>${int(maxB)}</b>——`+
+      (B>maxB?`相差 <b>${fmt(B/maxB,0)} 倍</b>，`:"")+`这就是梯度累积和数据并行存在的理由。`
+    : `当前配置下单卡连 batch=1 都放不下，必须切分模型。`;
+
+  // 八、上下文缩放
+  const Tstar = V/(2*L) + 6*d;
+  const scaleRows = [0.5,1,2,4,8,16].map(m=>{
+    const t = Math.round(T*m);
+    const lin = L*(8*t*d*d + 6*t*d*dff) + 2*t*d*V, quad = L*4*t*t*d;
+    return [ (m===1?`T = ${int(t)}（当前）`:`T = ${int(t)}`), `×${m}`,
+             flops(lin+quad), pct(quad/(lin+quad)),
+             fmt((lin+quad)/r.F,2)+"×" ];
+  });
+  tbl($("tScale"), ["上下文","相对当前","一次 forward","打分占比","总量倍数"], scaleRows);
+  $("scaleNote").innerHTML = `当前 d=${int(d)}，交叉点 <code>T* ≈ V/(2L)+6d = ${int(Tstar)}</code>。`+
+    ` 上下文超过它，注意力的平方项就压过整个模型的其余部分。`+
+    ` 当前 T=${int(T)} ${T<Tstar?"<b>还在线性区</b>":"<b>已经进入平方区</b>"}。`;
+}
+
+// 初始化
+$("presets").innerHTML = Object.keys(PRESETS).map(k=>`<button data-p="${k}">${k}</button>`).join("");
+$("presets").addEventListener("click", e=>{
+  const k = e.target.dataset.p; if(!k) return;
+  const P = PRESETS[k];
+  Object.keys(P).forEach(f=>$(f).value = P[f]);
+  $("autoff").checked = false;
+  render();
+});
+IN.forEach(k=>$(k).addEventListener("input", render));
+$("autoff").addEventListener("change", render);
+render();
+</script>
+</body>
+</html>
