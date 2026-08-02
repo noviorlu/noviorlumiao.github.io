@@ -120,6 +120,7 @@
   .eq b{color:var(--accent); font-weight:600}
   .note{font-size:13.5px; color:var(--muted); margin:10px 0}
   .note b{color:var(--ink)}
+  .sub-h{font-size:14px; margin:26px 0 8px; padding-top:14px; border-top:1px solid var(--line)}
 
   .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:14px 0}
   .kpi{background:var(--code); border:1px solid var(--line); border-radius:8px; padding:11px 13px}
@@ -250,12 +251,14 @@
     <div class="field"><label>峰值算力 <small>TFLOP/s</small></label><input id="peak" type="number" value="495"></div>
     <div class="field"><label>显存带宽 <small>TB/s</small></label><input id="bw" type="number" value="3.35" step="0.01"></div>
     <div class="field"><label>MFU <small>0–1</small></label><input id="mfu" type="number" value="0.5" step="0.05"></div>
-    <div class="field"><label>训练 batch <small>只用于第 7 段</small></label><input id="tB" type="number" value="1024"></div>
+    <div class="field"><label>训练 batch <small>只用于第 3 段</small></label><input id="tB" type="number" value="1024"></div>
     <div class="field"><label>目标 token 数 <small>单位：十亿（B）</small></label><input id="Dtok" type="number" value="419.43" step="0.01"></div>
     <div class="presets" id="ratios" style="margin:-4px 0 10px"></div>
+    <div class="field"><label>训练天数 <small>和 token 数联动</small></label><input id="days" type="number" value="202" step="0.1"></div>
+    <div class="field"><label>卡数 <small>GPU 张数</small></label><input id="ngpu" type="number" value="1" min="1"></div>
     <div class="derived" id="tokDer"></div>
-    <p class="note" style="font-size:12px; margin:6px 0 0">上面的 <code>B</code> 是<b>单卡</b>放得下的 batch（第 5 段用），
-    这里的是<b>全局</b> batch（第 7 段用）。两者相差的倍数就是梯度累积 × 数据并行。</p>
+    <p class="note" style="font-size:12px; margin:6px 0 0">上面的 <code>B</code> 是<b>单卡</b>放得下的 batch（第 2 段用），
+    这里的是<b>全局</b> batch（第 3 段用）。两者相差的倍数就是梯度累积 × 数据并行。</p>
   </aside>
 
   <!-- ── 输出 ── -->
@@ -291,15 +294,10 @@
         真实头数标在右上角）。Q / K / V / scores / ctx 都是这样。<br>
         <b>每个头有自己的颜色</b>，从 Q/K/V 一路带到 ctx，再带到「拼接后」那个盒子里的
         对应一段——<b>「拼头」就是把这 h 片沿特征维接成一条</b>，颜色能直接对上，
-        接完宽度正好回到 <code>h·d_k = d</code>，才能喂给 W_o。<br>
-        每摞下面那条细横杠也是<b>这些头拼接后有多宽</b>：Q 拼起来正好等于残差流的 d，
+        接完宽度正好回到 <code>h·d_k = d_q</code>，才能喂给 W_o。<br>
+        每摞下面那条细横杠也是<b>这些头拼接后有多宽</b>：Q 拼起来是 d_q，
         而 <b>GQA 下 K、V 的横杠只有 Q 的 n_kv/h</b>——省下的就是 KV cache。
-        右上角的小坐标轴标了三个方向分别是什么维。<br>
-        绿色的线就是<b>残差流本身</b>：它从上一段的 ⊕ 一路接到下一个子层的入口，中途还分出一条<b>捷径</b><b>绕过整个子层</b>直接落到 ⊕。注意捷径取的是
-        <b>进 RMSNorm 之前的原始 x</b>——归一化只作用在子层内部这一支上，残差通路始终是干净的，
-        这就是 pre-norm。门控 FFN 那排 <code>d_ff</code> 宽的盒子<b>正好 4 个</b>
-        （门 g、值 v、激活后的 g、两者相乘），对应第 5 段显存公式里的 <code>4·B·T·d_ff</code>。
-      </p>
+        右上角的小坐标轴标了三个方向分别是什么维。</p>
       <p class="note" id="archNote"></p>
 
       <details class="sub">
@@ -308,8 +306,7 @@
           <div class="scroll"><div class="arch" id="arch"></div></div>
           <p class="note" style="font-size:12.5px">
             末列的百分比是该算子占<b>一次前向总 FLOPs</b> 的真实比例（块内的已乘 L），
-            <b>把带数字的行全加起来正好 100%</b>；条长则是按全图最大项归一后的相对值——
-            否则最大也才 19%，全挤在左边看不出差别。</p>
+            <b>把带数字的行全加起来正好 100%</b>；条长则是按全图最大项归一后的相对值。</p>
         </div>
       </details>
       </div>
@@ -317,100 +314,84 @@
 
     <details class="card">
       <summary><span class="arw">▸</span><span class="num">1</span>
-        <span class="ttl">参数量与权重显存</span><span class="hd" id="hd1"></span></summary>
+        <span class="ttl">算力：一次前向、一步训练要多少 FLOPs</span><span class="hd" id="hd1"></span></summary>
       <div class="body">
+
+      <h4 class="sub-h" style="border:0; padding-top:0; margin-top:0">参数量 —— FLOPs 的底座</h4>
       <div class="eq" id="eqParams"></div>
       <div class="scroll"><table id="tParams"></table></div>
       <p class="note"><b>embedding 和 lm_head 各占一份 V·d</b>——本作业不做 weight tying，所以 V·d 要算两次，
       但 FLOPs 里只算一次（embedding 是查表，0 FLOPs）。这个不对称在小模型上很显眼：切到
-      <b>GPT-2 small</b> 预设，lm_head 一项独占 27% 的前向 FLOPs；到了 <b>XL</b> 只剩 4.7%——
-      因为 12·L·d² 涨得比 2·V·d 快得多。</p>
+      <b>GPT-2 small</b> 预设，lm_head 一项独占 27% 的前向 FLOPs；到了 <b>XL</b> 只剩 4.7%。</p>
       <p class="note" id="paramCheck"></p>
-      </div>
-    </details>
 
-    <details class="card">
-      <summary><span class="arw">▸</span><span class="num">2</span>
-        <span class="ttl">一次 forward 的 FLOPs</span><span class="hd" id="hd2"></span></summary>
-      <div class="body">
+      <h4 class="sub-h">一次 forward 的 FLOPs</h4>
       <div class="eq">矩阵乘 A(m×n) @ B(n×p)  =  <b>2·m·n·p</b> FLOPs     每个输出元素 = 长度 n 的点积 = n 乘 + n 加
 推论：x[T,d_in] @ W[d_in,d_out]  =  <b>2 · token数 · 参数量</b>     数完参数量就等于数完了 FLOPs</div>
       <div class="scroll"><table id="tFlops"></table></div>
       <div class="eq" id="eqFlops"></div>
       <p class="note">整张表里只有 <code>Q@K^T</code> 和 <code>scores@V</code> 让 T 出现两次——<b>那是 T² 的唯一来源</b>。
       这两项和 K/V 的头数<b>无关</b>：GQA 会把 K、V 复制回 h 份再算，所以省的是显存和搬运，不是这里的 FLOPs。</p>
-      </div>
-    </details>
 
-    <details class="card">
-      <summary><span class="arw">▸</span><span class="num">3</span>
-        <span class="ttl">四大块的占比</span><span class="hd" id="hd3"></span></summary>
-      <div class="body">
+      <h4 class="sub-h">六大块：占参数 与 占 FLOPs 是两回事</h4>
+      <p class="note" style="margin-bottom:4px"><b>占参数量</b></p>
+      <div class="bar" id="barParam"></div>
+      <div class="legend" id="legParam"></div>
+      <p class="note" style="margin:14px 0 4px"><b>占前向 FLOPs</b></p>
       <div class="bar" id="barFlops"></div>
       <div class="legend" id="legFlops"></div>
       <div class="scroll" style="margin-top:14px"><table id="tBlocks"></table></div>
       <p class="note" id="blockNote"></p>
-      </div>
-    </details>
 
-    <details class="card">
-      <summary><span class="arw">▸</span><span class="num">4</span>
-        <span class="ttl">从一次前向推到一步训练</span><span class="hd" id="hd4"></span></summary>
-      <div class="body">
+      <h4 class="sub-h">从一次前向推到一步训练</h4>
       <div class="eq">反向 ≈ 2 × 前向     每个权重矩阵反向要算两次：对输入的梯度 + 对权重的梯度
 <b>一步训练 ≈ 3 × 一次前向</b>
 AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开方、除法、累加</div>
       <div class="kpis" id="kStep"></div>
-      <p class="note"><b>优化器的算力可以忽略</b>，它的代价全在显存上。AdamW 贵在 2× 的状态，不贵在计算。</p>
+      <p class="note"><b>优化器的算力可以忽略</b>，它的代价全在显存上——见第 2 段。AdamW 贵在 2× 的状态，不贵在计算。</p>
+
+      <h4 class="sub-h">上下文拉长，FLOPs 的结构会翻转</h4>
+      <p class="note">FLOPs 里只有注意力打分是 T 的平方项，其余都是线性。所以 T 一长，占比结构会翻转。</p>
+      <div class="eq" id="eqTstar"></div>
+      <div class="scroll"><table id="tScale"></table></div>
+      <p class="note" id="scaleNote"></p>
       </div>
     </details>
 
     <details class="card">
-      <summary><span class="arw">▸</span><span class="num">5</span>
-        <span class="ttl">显存：4P 是地板，激活值是天花板</span><span class="hd" id="hd5"></span></summary>
+      <summary><span class="arw">▸</span><span class="num">2</span>
+        <span class="ttl">显存：4P 是地板，激活值是天花板</span><span class="hd" id="hd2"></span></summary>
       <div class="body">
       <div class="eq" id="eqMem"></div>
       <div class="kpis" id="kMem"></div>
+      <h4 class="sub-h">激活值都花在哪</h4>
       <div class="bar" id="barAct"></div>
       <div class="legend" id="legAct"></div>
       <div class="scroll" style="margin-top:14px"><table id="tAct"></table></div>
       <p class="note" id="actNote"></p>
+      <h4 class="sub-h">KV cache（推理才有的一笔）</h4>
       <p class="note" id="kvNote"></p>
       </div>
     </details>
 
     <details class="card">
-      <summary><span class="arw">▸</span><span class="num">6</span>
-        <span class="ttl">FLOPs 占比 ≠ 时间占比：arithmetic intensity</span><span class="hd" id="hd6"></span></summary>
+      <summary><span class="arw">▸</span><span class="num">3</span>
+        <span class="ttl">训练时间：token 预算 ↔ 天数，两头都能定</span><span class="hd" id="hd3"></span></summary>
       <div class="body">
+      <div class="eq">一步训练 = <b>3 × 前向FLOPs</b>　总算力 = 3·F·batch·steps，其中 steps = D/(batch·T)
+有效算力 = <b>峰值 × MFU × 卡数</b>
+<b>天数 = 总算力 / 有效算力</b>　　反过来：给定天数，能训的 token 数 = 天数·有效算力·T/(3·F)</div>
+      <p class="note" id="twoWay"></p>
+      <div class="kpis" id="kTime"></div>
+      <p class="note" id="timeNote"></p>
+
+      <h4 class="sub-h">为什么 MFU 打不满：arithmetic intensity</h4>
       <div class="eq">AI = FLOPs / 从显存搬运的字节数        [FLOP/byte]
 机器平衡点 = 峰值算力 / 显存带宽
 AI &gt; 平衡点 → compute-bound（算力吃满）    AI &lt; 平衡点 → memory-bound（在等数据）</div>
       <p class="note" id="aiDtype"></p>
       <div class="scroll"><table id="tAI"></table></div>
       <p class="note" id="aiNote"></p>
-      </div>
-    </details>
-
-    <details class="card">
-      <summary><span class="arw">▸</span><span class="num">7</span>
-        <span class="ttl">训完要多久</span><span class="hd" id="hd7"></span></summary>
-      <div class="body">
-      <div class="eq">总量 = <b>3 × 前向FLOPs × 训练batch × steps</b>     注意用的是全局 batch，不是第 5 段那个单卡 B
-耗时 = 总量 / (峰值算力 × MFU)</div>
-      <div class="kpis" id="kTime"></div>
-      <p class="note" id="timeNote"></p>
-      </div>
-    </details>
-
-    <details class="card">
-      <summary><span class="arw">▸</span><span class="num">8</span>
-        <span class="ttl">上下文拉长会发生什么</span><span class="hd" id="hd8"></span></summary>
-      <div class="body">
-      <p class="note">FLOPs 里只有注意力打分是 T 的平方项，其余都是线性。所以 T 一长，占比结构会翻转。</p>
-      <div class="eq" id="eqTstar"></div>
-      <div class="scroll"><table id="tScale"></table></div>
-      <p class="note" id="scaleNote"></p>
       </div>
     </details>
 
@@ -427,7 +408,7 @@ AI &gt; 平衡点 → compute-bound（算力吃满）    AI &lt; 平衡点 → m
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const IN = ["V","T","L","d","h","nkv","dk","dff","B","bpe","vram","peak","bw","mfu","tB","Dtok"];
+const IN = ["V","T","L","d","h","nkv","dk","dff","B","bpe","vram","peak","bw","mfu","tB","Dtok","days","ngpu"];
 const SEL = ["attn","ffn"];
 
 // 预设：形状 + 变体。参数量已对着公开数字核过，见第 1 段末尾那行自检。
@@ -465,8 +446,9 @@ const GPUS = {
   "H100 SXM": {vram:80,  bw:3.35, tf32:495,  bf16:990,  fp8:1979, mem:"80 GB HBM3"},
   "B200":     {vram:192, bw:8.0,  tf32:1100, bf16:2250, fp8:4500, mem:"192 GB HBM3e"},
 };
-const COLORS = ["#3d7f5e","#5f9ea0","#c08552","#8a7aa8","#b0563f"];
+const COLORS = ["#3d7f5e","#5f9ea0","#c08552","#8a7aa8","#b0563f","#6b8fb5"];
 
+let timeDriver = "D";      // "D"=按 token 预算算天数；"days"=按天数反推 token 预算
 const fmt = (n,p=2) => n.toLocaleString("en-US",{minimumFractionDigits:p,maximumFractionDigits:p});
 const int = n => Math.round(n).toLocaleString("en-US");
 const N   = x => String(Math.round(x));
@@ -546,11 +528,15 @@ function compute(p){
   const f_lm = 2*T*d*V;
   const F = L*perLayer + f_lm;
 
+  // 六块。pv = 参数量，v = 前向 FLOPs。两列各自加起来正好是 P 和 F。
+  // 顺序别动：外面有地方按下标 2 取"注意力打分"这一块。
   const blocks = [
-    {k:"FFN",           sym:`2·T·(${ff.n}·d·d_ff)·L`,   v:L*ff.n*f_ff1},
-    {k:"Attention 投影", sym:"2·T·(2·d·d_q + 2·d·d_kv)·L", v:L*(f_q+2*f_kv+f_o)},
-    {k:"Attention 打分", sym:"4·L·T²·d_q",                v:L*(f_score+f_ctx)},
-    {k:"lm_head",       sym:"2·T·d·V",                  v:f_lm},
+    {k:"token_embeddings", sym:"V·d",                      pv:emb,           v:0},
+    {k:"Attention 投影",    sym:"2·d·d_q + 2·d·d_kv（×L）", pv:L*attn,        v:L*(f_q+2*f_kv+f_o)},
+    {k:"Attention 打分",    sym:"4·L·T²·d_q",               pv:0,             v:L*(f_score+f_ctx)},
+    {k:"FFN",              sym:`${ff.n}·d·d_ff（×L）`,      pv:L*ffnP,        v:L*ff.n*f_ff1},
+    {k:"RMSNorm",          sym:"2·d×L + d",                pv:L*norms + d,   v:0},
+    {k:"lm_head",          sym:"d·V",                      pv:lmh,           v:f_lm},
   ];
 
   // ── 激活值 ──
@@ -1101,7 +1087,7 @@ function render(){
     + ` pre-norm 的形状约束就这一条：每个子层只往残差流上<b>加</b>东西，自己内部怎么变宽变窄都行。`
     + `<br>橙色的 <code>scores</code> ${S(N(B),N(h),N(T),N(T))} 是<b>整个前向里 T 唯一出现两次的地方</b>，`
     + `${int(B*h*T*T)} 个元素，是残差流的 <b>${fmt(h*T/d,1)} 倍</b>（比值 = h·T/d）。`
-    + ` 它在 FLOPs 上只占 ${pct(r.blocks[2].v/r.F)}，在显存上却是第 5 段的大头。`
+    + ` 它在 FLOPs 上只占 ${pct(r.blocks[2].v/r.F)}，在显存上却是第 2 段的大头。`
     + (p.attn !== "mha"
         ? `<br><b>${ATTN[p.attn]} 在图上看得见</b>：K、V 的进深只有 ${N(nkv)}，而 Q 是 ${N(h)}——`
           + `KV cache 因此小 ${fmt(d/dkv,2)}×。但 <code>scores</code> 那个盒子一点没变，`
@@ -1200,15 +1186,24 @@ function render(){
 ${dq===dkv ? "  d_q = d_kv，前两项可以合并" : `  d_kv 只有 d_q 的 ${fmt(dkv/dq,3)}，第二项按比例缩小`}
 总计 = L·每层 + <b>2·T·d·V</b>（lm_head）`;
 
-  // ── 三、四大块 ──
+  // ── 四大块：参数 与 FLOPs 两个口径 ──
+  stack($("barParam"), $("legParam"), r.blocks.map(b=>({k:b.k, v:b.pv})));
   stack($("barFlops"), $("legFlops"), r.blocks.map(b=>({k:b.k, v:b.v})));
-  tbl($("tBlocks"), ["块","符号","FLOPs","占比"],
-      r.blocks.map(b=>[b.k, b.sym, flops(b.v), pct(b.v/r.F)]));
-  const big = r.blocks.reduce((a,b)=>b.v>a.v?b:a);
-  const sc  = r.blocks[2];
-  $("blockNote").innerHTML = `当前配置下最贵的是 <b>${big.k}（${pct(big.v/r.F)}）</b>，`+
-    `而"真正的注意力计算"（激活×激活的那两次）只占 <b>${pct(sc.v/r.F)}</b>。`+
-    `打分与投影的比值是 <code>T·d_q / (d·(d_q+d_kv)) = ${fmt(T*dq/(d*(dq+dkv)),3)}</code>——<b>层数完全约掉了</b>。`;
+  tbl($("tBlocks"), ["块","符号","参数量","占参数","FLOPs","占前向"],
+      r.blocks.map(b=>[b.k, b.sym, b.pv?cnt(b.pv):"0", b.pv?pct(b.pv/r.P):"—",
+                              b.v ?flops(b.v):"0",   b.v ?pct(b.v/r.F):"—"]),
+      ["合计","", cnt(r.P), "100%", flops(r.F), "100%"]);
+  const big  = r.blocks.reduce((a,b)=>b.v>a.v?b:a);
+  const bigP = r.blocks.reduce((a,b)=>b.pv>a.pv?b:a);
+  const sc   = r.blocks[2];
+  $("blockNote").innerHTML =
+      `FLOPs 上最贵的是 <b>${big.k}（${pct(big.v/r.F)}）</b>，参数上最贵的是 <b>${bigP.k}（${pct(bigP.pv/r.P)}）</b>`
+    + (big.k===bigP.k ? "——这次是同一块。" : "——<b>不是同一块</b>。")
+    + `<br><b>两端各有一个极端</b>：<code>token_embeddings</code> 占 ${pct(r.blocks[0].pv/r.P)} 的参数却是 `
+    + `<b>0 FLOPs</b>（查表不算乘法）；<code>Attention 打分</code> 占 ${pct(sc.v/r.F)} 的 FLOPs 却是 `
+    + `<b>0 参数</b>（激活×激活，没有权重）。所以"数完参数量就等于数完 FLOPs"这句话，`
+    + `<b>只对那些真的有权重的矩阵乘成立</b>。`
+    + `<br>打分与投影的比值是 <code>T·d_q / (d·(d_q+d_kv)) = ${fmt(T*dq/(d*(dq+dkv)),3)}</code>——<b>层数完全约掉了</b>。`;
 
   // ── 四、训练一步 ──
   const stepF = 3*r.F, optF = 14*r.P;
@@ -1295,25 +1290,42 @@ KV cache（推理，不是训练）= bytes · <b>2·L·B·T·d_kv</b>`;
     ` 解码时 T=1，投影的 AI 降到 <code>2d/((2+d)·bytes) ≈ ${fmt(decAI,2)}</code>，极度 memory-bound——这是自回归生成慢的根本原因。`;
 
   // ── 七、时间 ──
-  const D = Math.max(0, p.Dtok)*1e9;                 // 目标 token 总数
+  const nGPU   = Math.max(1, Math.round(p.ngpu));
+  const eff    = p.peak*1e12*p.mfu*nGPU;             // 有效算力，FLOP/s
+  const perTok = 3*r.F/T;                            // 训一个 token 要多少 FLOPs（含注意力的 T²）
+  let D, sec;
+  if(timeDriver === "days"){                         // 给定天数 → 反推能训多少 token
+    sec = Math.max(0, p.days)*86400;
+    D   = eff > 0 ? sec*eff/perTok : 0;
+    $("Dtok").value = +(D/1e9).toFixed(2);
+  }else{                                             // 给定 token 预算 → 算要多少天
+    D   = Math.max(0, p.Dtok)*1e9;
+    sec = eff > 0 ? D*perTok/eff : 0;
+    $("days").value = +(sec/86400).toFixed(2);
+  }
   const steps = (p.tB*T) > 0 ? D/(p.tB*T) : 0;       // 步数是推出来的，不是填的
-  const totalF = stepF*p.tB*steps, sec = totalF/(p.peak*1e12*p.mfu);
+  const totalF = D*perTok;
   const approx6ND = 6*r.P*D;                          // 教科书的 6ND：忽略了注意力的 T² 项
+  $("twoWay").innerHTML = timeDriver === "days"
+    ? `当前是<b>按天数反推</b>：${fmt(p.days,1)} 天 × ${nGPU} 张卡 × ${fmt(p.peak*p.mfu,0)} TFLOP/s`
+      + ` ⇒ 能训 <b>${cnt(D)}</b> tokens。改左边的「目标 token 数」就切回另一头。`
+    : `当前是<b>按 token 预算算</b>：${cnt(D)} tokens ⇒ ${nGPU} 张卡要 <b>${durShort(sec)}</b>。`
+      + ` 改左边的「训练天数」就切成反推 token 数。`;
   $("kTime").innerHTML = [
-    ["总算力","3·F·batch·steps", flops(totalF)],
+    ["总算力","3·F·D/T", flops(totalF)],
     ["训练步数","D / (batch·T)", int(steps)],
     ["6·N·D 近似","忽略注意力的 T²", flops(approx6ND)+`（低估 ${pct(1-approx6ND/totalF)}）`],
-    ["有效算力",`${fmt(p.peak,0)}×${p.mfu}`, fmt(p.peak*p.mfu,0)+" TFLOP/s"],
-    ["单卡耗时","总量/有效算力", dur(sec)],
-    ["两周训完需要","耗时 / 14 天", fmt(sec/(14*86400),1)+" 张卡"],
+    ["有效算力",`${fmt(p.peak,0)}×${p.mfu}×${nGPU} 卡`, fmt(p.peak*p.mfu*nGPU,0)+" TFLOP/s"],
+    ["耗时",`${nGPU} 张卡`, dur(sec)],
+    ["每个 token","3·F/T", flops(perTok)],
   ].map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v">${k[2]}</div><div class="s">${k[1]}</div></div>`).join("");
   $("timeNote").innerHTML = maxB>0
-    ? `全局 batch 是 <b>${int(p.tB)}</b>，而第 5 段算出单卡最多放 <b>${int(maxB)}</b>——`+
+    ? `全局 batch 是 <b>${int(p.tB)}</b>，而第 2 段算出单卡最多放 <b>${int(maxB)}</b>——`+
       (p.tB>maxB?`相差 <b>${fmt(p.tB/maxB,0)} 倍</b>，`:"")+`这就是梯度累积和数据并行存在的理由。`
     : `当前配置下单卡连 batch=1 都放不下，必须切分模型。`;
 
   // ── token 预算：和参数量的比值 ──
-  const Dtot = Math.max(0, p.Dtok)*1e9, ratio = Dtot/r.P;
+  const Dtot = D, ratio = Dtot/r.P;
   const verdict = ratio < 15 ? ["bad","欠训——还没到 Chinchilla 的算力最优点"]
                 : ratio < 40 ? ["ok","Chinchilla 附近（≈20× 是同等算力下 loss 最低的配比）"]
                 : ratio < 300 ? ["ok","过训——现在主流的做法，为了推理时更省"]
@@ -1357,14 +1369,9 @@ ${p.attn==="mha"&&dq===d&&ff.gated&&Math.abs(dff-8/3*d)<64 ? "  MHA + d_q=d + �
 
   // ── 卡片收起时的一行结论 ──
   hd(0, `${N(L)}×${ATTN[p.attn]}+${ff.label} · 残差流 ${xd}`);
-  hd(1, `P = ${cnt(r.P)} · 权重 ${bytes(bpe*r.P)}`);
-  hd(2, `${flops(r.F)} / 次前向`);
-  hd(3, `最大块 ${big.k} ${pct(big.v/r.F)}`);
-  hd(4, `${flops(stepF)} / 步 · 优化器仅 ${pct(optF/stepF)}`);
-  hd(5, `${bytes(total)} / ${int(p.vram)} GB`, total > vramB);
-  hd(6, bad.length ? `${bad.length}/${r.ai.length} 项 memory-bound` : `${r.ai.length} 项全 compute-bound`, bad.length>0);
-  hd(7, `${durShort(sec)} · 单卡`);
-  hd(8, `T* ≈ ${int(r.Tstar)}，当前${T<r.Tstar?"在线性区":"已进平方区"}`, T>=r.Tstar);
+  hd(1, `${flops(r.F)} / 次前向 · ${flops(stepF)} / 步`);
+  hd(2, `${bytes(total)} / ${int(p.vram)} GB`, total > vramB);
+  hd(3, `${durShort(sec)} · ${nGPU} 卡 · ${fmt(ratio,0)}×P tokens`);
 }
 
 // 初始化
@@ -1378,6 +1385,7 @@ $("ratios").addEventListener("click", e=>{
   const q = {}; IN.forEach(f => q[f] = parseFloat($(f).value) || 0);
   SEL.forEach(f => q[f] = $(f).value);
   const P = compute(q).P;
+  timeDriver = "D";
   $("Dtok").value = k ? +(k*P/1e9).toFixed(2) : +(400000*q.tB*q.T/1e9).toFixed(2);
   render();
 });
@@ -1394,6 +1402,8 @@ $("presets").addEventListener("click", e=>{
   $("autoff").checked = false; $("autodk").checked = false;
   render();
 });
+$("Dtok").addEventListener("input", ()=>timeDriver = "D");
+$("days").addEventListener("input", ()=>timeDriver = "days");
 IN.forEach(k=>$(k).addEventListener("input", render));
 $("ffn").addEventListener("change", render);
 // 注意力的下拉框只是改 n_kv 的快捷方式：真正决定变体的是 n_kv 本身
