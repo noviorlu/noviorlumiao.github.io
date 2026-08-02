@@ -136,8 +136,9 @@
   .archwrap{overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:6px}
   .archwrap svg{display:block}
   svg .lbl{font:11px var(--mono); fill:var(--ink)}
+  svg .wlbl{font:11px var(--mono); fill:var(--muted); font-style:italic}
   svg .dim{font:10px var(--mono); fill:var(--muted)}
-  svg .op{font:10.5px var(--mono); fill:var(--muted)}
+  svg .op{font:9.5px var(--mono); fill:var(--muted)}
   svg .grp{font:11px var(--mono); fill:var(--accent); font-weight:700}
   svg .flow{stroke:var(--muted); stroke-width:1.2; fill:none; opacity:.75}
   svg .grid{stroke:var(--panel); stroke-width:.6; opacity:.55}
@@ -251,7 +252,10 @@
         <span style="font-family:var(--mono)">⌇</span>。往盒子上一停能看到精确元素数和字节数。<br>
         <span class="tag ok">绿</span> 残差流与它的捷径 &nbsp;
         <span class="tag bad">橙</span> 含 T² 的张量 &nbsp;
-        深度方向 = 头数或 batch。<br>
+        <b>斜纹</b> = 权重矩阵（每层各一份），实心 = 激活张量。<br>
+        Q / K / V / ctx 的宽度是<b>拼接后的真实宽度</b> n×d_k，里面的竖线就是头的分界——
+        所以 Q 拼起来正好和残差流一样宽（h·d_k = d），而 GQA 下 K、V 明显更窄。
+        scores 是每个头一张 T×T，画成深度方向的分层。<br>
         绿色那条粗线是<b>残差捷径</b>：它从子层入口<b>绕过整个子层</b>直接落到 ⊕。注意它取的是
         <b>进 RMSNorm 之前的原始 x</b>——归一化只作用在子层内部这一支上，残差通路始终是干净的，
         这就是 pre-norm。门控 FFN 那排 <code>d_ff</code> 宽的盒子<b>正好 4 个</b>
@@ -526,45 +530,69 @@ function compute(p){
 //  几何架构图
 // ═══════════════════════════════════════════════════════════
 const GEO = {
-  k: 1.6, min: 9, max: 160,        // px = k·√元素数，两端夹住
-  dmin: 5, dmax: 30,
-  M: 66,          // 左右留白（要放得下 "T=8192" 这种行标）
-  G: 76,          // 主流程各列之间的水平间距
-  gTrio: 12,      // Q/K/V 这种并排小盒之间的间距
+  k: 1.45, min: 10, max: 150,     // px = k·√元素数，两端夹住
+  dmin: 5, dmax: 26,
+  M: 56,          // 左右留白
+  A: 42,          // 相邻两个盒子之间的箭头长度（要放得下箭头上的算子名）
   padTop: 58,     // 组标题 + 残差捷径线 占的高度
   resY: 36,       // 捷径线相对分组框顶的 y
   wPlus: 40,      // ⊕ 节点占的宽
-  labUp: 30,      // 盒子上方标签占的高度
-  labDn: 20,      // 盒子下方维度标签占的高度
+  labUp: 30, labDn: 20,
 };
 const px  = n => Math.max(GEO.min, Math.min(GEO.max, GEO.k*Math.sqrt(Math.max(n,1))));
 const cut = n => GEO.k*Math.sqrt(Math.max(n,1)) > GEO.max;
 const dep = n => Math.max(GEO.dmin, Math.min(GEO.dmax, 2.2*Math.sqrt(Math.max(n,1))));
-const boxW = t => px(t.cols) + dep(t.deep)*0.62;      // 含斜投影后的总宽
+const boxW = t => px(t.cols) + dep(t.deep||1)*0.62;
 
-// 一个张量盒。anchor = front 面的左下角。t: {name, shape?, rows, cols, deep,
-// rows_l?, cols_l?, deep_l?, cls?, title}
+// 一个张量盒。front 面 = rows × cols，往右后方拉 depth。
+//   slices : 把 front 面沿宽度方向切成几片（多头：一片 = 一个头）
+//   slabs  : 把 depth 方向切成几层（多头的另一种画法，用于 T×T 的打分矩阵）
+//   weight : 画成权重样式（虚线边 + 斜纹），和激活张量区分开
 function box(x, yBase, t){
-  const w = px(t.cols), hh = px(t.rows), D = dep(t.deep);
+  const w = px(t.cols), hh = px(t.rows), D = dep(t.deep||1);
   const ox = D*0.62, oy = D*0.44, y = yBase - hh;
-  const fill = t.cls === "res" ? "var(--accent-soft)" : t.cls === "hot" ? "var(--warn-soft)" : "var(--code)";
-  const line = t.cls === "res" ? "var(--accent)"      : t.cls === "hot" ? "var(--warn)"      : "var(--muted)";
+  const fill = t.weight ? "url(#hatch)"
+             : t.cls === "res" ? "var(--accent-soft)"
+             : t.cls === "hot" ? "var(--warn-soft)" : "var(--code)";
+  const flat = t.cls === "res" ? "var(--accent-soft)" : t.cls === "hot" ? "var(--warn-soft)" : "var(--code)";
+  const line = t.weight ? "var(--muted)"
+             : t.cls === "res" ? "var(--accent)" : t.cls === "hot" ? "var(--warn)" : "var(--muted)";
+  const dash = t.weight ? ` stroke-dasharray="3.5 2.5"` : "";
   const P = (...pts) => pts.map(q=>q.join(",")).join(" ");
 
   let s = `<g class="t"><title>${t.title}</title>`;
-  s += `<polygon points="${P([x,y],[x+w,y],[x+w+ox,y-oy],[x+ox,y-oy])}" fill="${fill}" stroke="${line}" stroke-width="1" opacity=".5"/>`;
-  s += `<polygon points="${P([x+w,y],[x+w+ox,y-oy],[x+w+ox,y+hh-oy],[x+w,y+hh])}" fill="${fill}" stroke="${line}" stroke-width="1" opacity=".72"/>`;
-  s += `<rect class="fc" x="${x}" y="${y}" width="${w}" height="${hh}" fill="${fill}" stroke="${line}" stroke-width="1.3"/>`;
+  if(D > GEO.dmin*1.01 || !t.weight){
+    s += `<polygon points="${P([x,y],[x+w,y],[x+w+ox,y-oy],[x+ox,y-oy])}" fill="${flat}" stroke="${line}" stroke-width="1" opacity=".5"${dash}/>`;
+    s += `<polygon points="${P([x+w,y],[x+w+ox,y-oy],[x+w+ox,y+hh-oy],[x+w,y+hh])}" fill="${flat}" stroke="${line}" stroke-width="1" opacity=".72"${dash}/>`;
+  }
+  s += `<rect class="fc" x="${x}" y="${y}" width="${w}" height="${hh}" fill="${fill}" stroke="${line}" stroke-width="1.3"${dash}/>`;
+  // 细网格纹理（只是暗示"一格一格"，不代表真实格数）
   const nv = Math.max(2, Math.min(6, Math.round(w/9))), nh = Math.max(2, Math.min(6, Math.round(hh/9)));
-  for(let i=1;i<nv;i++) s += `<line class="grid" x1="${x+w*i/nv}" y1="${y}" x2="${x+w*i/nv}" y2="${y+hh}"/>`;
-  for(let i=1;i<nh;i++) s += `<line class="grid" x1="${x}" y1="${y+hh*i/nh}" x2="${x+w}" y2="${y+hh*i/nh}"/>`;
-  if(cut(t.cols)){                       // 这一维被夹住了，画撕裂边
+  if(!t.weight){
+    for(let i=1;i<nv;i++) s += `<line class="grid" x1="${x+w*i/nv}" y1="${y}" x2="${x+w*i/nv}" y2="${y+hh}"/>`;
+    for(let i=1;i<nh;i++) s += `<line class="grid" x1="${x}" y1="${y+hh*i/nh}" x2="${x+w}" y2="${y+hh*i/nh}"/>`;
+  }
+  // 多头：沿宽度方向切片，每片就是一个头
+  if(t.slices > 1){
+    const k = Math.min(t.slices, 8);
+    for(let i=1;i<k;i++)
+      s += `<line x1="${x+w*i/k}" y1="${y}" x2="${x+w*i/k}" y2="${y+hh}" stroke="${line}" stroke-width="1" opacity=".9"/>`;
+  }
+  // 多头的另一种：沿深度方向分层
+  if(t.slabs > 1){
+    const k = Math.min(t.slabs, 6);
+    for(let i=1;i<k;i++){
+      const f = i/k;
+      s += `<line x1="${x+w+ox*f}" y1="${y-oy*f}" x2="${x+w+ox*f}" y2="${y+hh-oy*f}" stroke="${line}" stroke-width=".8" opacity=".8"/>`;
+    }
+  }
+  if(cut(t.cols)){
     let zz = `M ${x+w} ${y}`;
     for(let i=0;i<Math.ceil(hh/7);i++) zz += ` l ${i%2?4:-4} 7`;
     s += `<path d="${zz}" fill="none" stroke="${line}" stroke-width="1.6" stroke-linejoin="round"/>`;
   }
   const cxm = x + w/2 + ox/2;
-  s += `<text class="lbl" x="${cxm}" y="${y-oy-(t.shape?15:5)}" text-anchor="middle">${t.name}</text>`;
+  s += `<text class="${t.weight?"wlbl":"lbl"}" x="${cxm}" y="${y-oy-(t.shape?15:5)}" text-anchor="middle">${t.name}</text>`;
   if(t.shape) s += `<text class="dim" x="${cxm}" y="${y-oy-4}" text-anchor="middle">${t.shape}</text>`;
   if(t.cols_l) s += `<text class="dim" x="${x+w/2}" y="${yBase+13}" text-anchor="middle">${t.cols_l}</text>`;
   if(t.rows_l) s += `<text class="dim" x="${x-6}" y="${y+hh/2+3}" text-anchor="end">${t.rows_l}</text>`;
@@ -572,55 +600,59 @@ function box(x, yBase, t){
   s += `</g>`;
   return s;
 }
-function arrow(x1, x2, y, label){
-  let s = `<path class="flow" d="M ${x1} ${y} L ${x2-7} ${y}"/>`
-        + `<path d="M ${x2} ${y} l -7 -4 l 0 8 z" fill="var(--muted)" opacity=".75"/>`;
-  if(label) s += `<text class="op" x="${(x1+x2)/2}" y="${y-7}" text-anchor="middle">${label}</text>`;
-  return s;
-}
 
 function drawArch(p, r){
   const {V,T,L,d,h,B,dff} = p, {nkv, dk, dkv, ff} = r;
   const S = (...a)=>"["+a.join(",")+"]";
-  const tip = (nm, sh, n) => `${nm} ${sh}\n${int(n)} 个元素 · ${bytes(p.bpe*n)}`;
-  const G = GEO.G, M = GEO.M;
+  const tipT = (nm, sh, n) => `激活张量 ${nm} ${sh}\n${int(n)} 个元素 · ${bytes(p.bpe*n)}`;
+  const tipW = (nm, sh, n) => `权重 ${nm} ${sh}\n${int(n)} 个参数 · ${bytes(p.bpe*n)}（每层都有一份）`;
+  const A = GEO.A, M = GEO.M;
 
-  // ── 盒子模板 ──
+  // ── 激活张量 ──
   const Tstream = (nm, cls, rl) => ({name:nm, rows:T, cols:d, deep:B, cls,
-      cols_l:`d=${N(d)}`, rows_l:rl?`T=${N(T)}`:"", title:tip(nm,S(B,T,d),B*T*d)});
-  const Thead = (nm, dn) => ({name:`${nm} ×${N(dn)}`, rows:T, cols:dk, deep:dn,
-      cols_l:`d_k=${N(dk)}`, title:tip(nm,S(B,dn,T,N(dk)),B*dn*T*dk)});
-  const Tsc   = {name:"scores", rows:T, cols:T, deep:h, cls:"hot",
-      cols_l:`T=${N(T)}`, deep_l:`×${N(h)}`, title:tip("scores",S(B,h,T,T),B*h*T*T)};
-  const Tctx  = {name:"ctx", rows:T, cols:dk, deep:h, cls:"hot",
-      cols_l:`d_k=${N(dk)}`, deep_l:`×${N(h)}`, title:tip("ctx",S(B,h,T,N(dk)),B*h*T*dk)};
-  const Tff   = nm => ({name:nm, rows:T, cols:dff, deep:B, cols_l:`d_ff=${N(dff)}`,
-      title:tip(nm,S(B,T,dff),B*T*dff)});
-  const Tlog  = {name:"logits", rows:T, cols:V, deep:B,
-      cols_l:`V=${N(V)}${cut(V)?" ⌇":""}`, title:tip("logits",S(B,T,V),B*T*V)};
+      cols_l:`d=${N(d)}`, rows_l:rl?`T=${N(T)}`:"", title:tipT(nm,S(B,T,d),B*T*d)});
+  // 多头张量：宽度画成拼接后的真实宽度 n·d_k，切成 n 片
+  const Thead = (nm, n) => ({name:nm, rows:T, cols:n*dk, deep:B, slices:n,
+      cols_l:`${N(n)}×d_k=${N(n*dk)}`, title:tipT(nm,S(B,n,T,N(dk)),B*n*T*dk)});
+  const Tsc  = {name:"scores", rows:T, cols:T, deep:h, slabs:h, cls:"hot",
+      cols_l:`T=${N(T)}`, deep_l:`×${N(h)}`, title:tipT("scores",S(B,h,T,T),B*h*T*T)};
+  const Tctx = {name:"ctx", rows:T, cols:d, deep:B, slices:h, cls:"hot",
+      cols_l:`${N(h)}×d_k=${N(d)}`, title:tipT("ctx",S(B,h,T,N(dk)),B*h*T*dk)};
+  const Tff  = nm => ({name:nm, rows:T, cols:dff, deep:B, cols_l:`d_ff=${N(dff)}`,
+      title:tipT(nm,S(B,T,dff),B*T*dff)});
+  const Tlog = {name:"logits", rows:T, cols:V, deep:B,
+      cols_l:`V=${N(V)}${cut(V)?" ⌇":""}`, title:tipT("logits",S(B,T,V),B*T*V)};
 
-  const wS = boxW(Tstream("")), wH = boxW(Thead("Q",h)), wSC = boxW(Tsc),
-        wCT = boxW(Tctx), wFF = boxW(Tff("")), wLG = boxW(Tlog), wIds = px(1)+dep(B)*0.62;
+  // ── 权重 ──
+  const Wm = (nm, rows, cols, rl, cl) => ({name:nm, rows, cols, deep:1, weight:1,
+      cols_l:cl, title:tipW(nm, S(rows,cols)+"  ← 左侧的高就是 "+rl, rows*cols)});
+  const Wg = nm => ({name:nm, shape:S(d), rows:1, cols:d, deep:1, weight:1,
+      title:tipW(nm, S(d), d)});
+
+  const wS = boxW(Tstream("")), wSC = boxW(Tsc), wCT = boxW(Tctx), wFF = boxW(Tff("")),
+        wLG = boxW(Tlog), wIds = px(1)+dep(B)*0.62, wG = boxW(Wg("")),
+        wQKV = px(Math.max(h*dk, nkv*dk)), wWq = px(d), wWff = px(dff), wW2 = px(d);
   const hBox = px(T), rowH = GEO.labUp + hBox + GEO.labDn;
 
-  // 各排总宽 → 画布宽
   const W = Math.max(620,
-    M + wIds + G + wS + M,                               // 顶部
-    M + wS + G + wS + G + wFF + G + wFF + G + wFF + G + wS + GEO.wPlus + M, // 前馈
-    M + wS + G + wLG + M);                               // 出口
+    M + wIds + A + px(d) + A + wS + M,
+    M + wS +A+ wG +A+ wS +A+ wWq +A+ wQKV +A+ wSC +A+ wCT +A+ wWq +A+ wS + GEO.wPlus + M,
+    M + wS +A+ wG +A+ wS +A+ wWff +A+ wFF +A+ wFF +A+ 30 +A+ wFF +A+ wW2 +A+ wS + GEO.wPlus + M,
+    M + wS +A+ px(d) +A+ wLG + M);
 
-  let svg = "", y = 0;
+  let svg = `<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">`
+          + `<rect width="6" height="6" fill="var(--code)"/>`
+          + `<line x1="0" y1="0" x2="0" y2="6" stroke="var(--muted)" stroke-width="1.4" opacity=".45"/></pattern></defs>`;
+  let y = 0;
   const band = txt => {
     const s = `<rect class="band" x="20" y="${y}" width="${W-40}" height="18" rx="4"/>`
             + `<text class="grp" x="${W/2}" y="${y+13}" text-anchor="middle">${txt}</text>`;
     y += 18 + 14; return s;
   };
-  // 折线连接：从 (x1,y1) 右行 → 竖走 → 右行进 (x2,y2)。xm 可指定拐点
   const elbow = (x1,y1,x2,y2,label,xm) => {
     const mx = xm !== undefined ? xm : (x1+x2)/2;
     let s = `<path class="flow" d="M ${x1} ${y1} H ${mx} V ${y2} H ${x2-7}"/>`
           + `<path d="M ${x2} ${y2} l -7 -4 l 0 8 z" fill="var(--muted)" opacity=".75"/>`;
-    // 直线段把标签放整段中点；折线段放在最后那截水平线上，别压到右边的盒子
     const lx = Math.abs(y1-y2) < 0.5 ? (x1+x2)/2 : (mx+x2)/2;
     if(label) s += `<text class="op" x="${lx}" y="${y2-7}" text-anchor="middle">${label}</text>`;
     return s;
@@ -629,7 +661,6 @@ function drawArch(p, r){
     + `stroke="${acc?"var(--accent)":"var(--muted)"}" stroke-width="${acc?1.6:1}"/>`
     + `<text class="lbl" x="${x}" y="${y+4}" text-anchor="middle" `
     + `${acc?'fill="var(--accent)" font-weight="700"':''}>${ch}</text>`;
-  // 残差捷径：从 x 盒顶边抬起 → 横穿整个子层 → 落进 ⊕
   const skip = (xFrom, yBoxTop, yLine, xPlus, yPlus, label) => {
     let s = `<path class="resline" d="M ${xFrom} ${yBoxTop} V ${yLine} H ${xPlus} V ${yPlus-13}"/>`
           + `<path d="M ${xPlus} ${yPlus-11} l -4.5 -8 l 9 0 z" fill="var(--accent)"/>`;
@@ -640,121 +671,127 @@ function drawArch(p, r){
   // ── 顶部 ──
   y += 8;
   let yb = y + GEO.labUp + hBox, x = M;
-  svg += box(x, yb, {name:"token ids", shape:S(B,T), rows:T, cols:1, deep:B,
-                     rows_l:`T=${N(T)}`, title:tip("token ids",S(B,T),B*T)});
-  x += wIds;
-  svg += elbow(x, yb-hBox/2, x+G, yb-hBox/2, "查表 W[x]");
-  x += G;
-  svg += box(x, yb, {...Tstream("x  残差流","res",0), shape:S(B,T,d)});
+  svg += box(x, yb, {name:"ids", shape:S(B,T), rows:T, cols:1, deep:B,
+                     rows_l:`T=${N(T)}`, title:tipT("token ids",S(B,T),B*T)});
+  x += wIds; svg += elbow(x, yb-hBox/2, x+A, yb-hBox/2, "查表"); x += A;
+  svg += box(x, yb, Wm("W_emb", V, d, `V=${N(V)}`, `d=${N(d)}`));
+  x += px(d); svg += elbow(x, yb-hBox/2, x+A, yb-hBox/2, ""); x += A;
+  svg += box(x, yb, {...Tstream("x","res",0), shape:S(B,T,d)});
   y = yb + GEO.labDn;
   svg += band(`残差流 x  ${S(B,T,d)}  ——  往下每个子层只往它身上「加」，宽度恒为 d=${N(d)}`);
 
-  // ── 自注意力：Q / K / V 上下三排 ──
+  // ── 自注意力 ──
   let gTop = y; y += GEO.padTop;
-  const aTop = y;
-  const yAt = f => aTop + f*rowH + GEO.labUp + hBox;      // 第 f 排的底线（f 可为小数）
-  const mAt = f => yAt(f) - hBox/2;
-  const midA = mAt(1);                                    // 三排的中间那排
+  const aTop = y, yAt = f => aTop + f*rowH + GEO.labUp + hBox, mAt = f => yAt(f) - hBox/2;
+  const midA = mAt(1);
   x = M;
-  svg += box(x, yAt(1), Tstream("x", "res", 1));  const xR = x + wS;
-  x = xR + G;
-  svg += elbow(xR, midA, x, midA, "");
-  svg += box(x, yAt(1), Tstream("RMSNorm ln1", "", 0));  const lnR = x + wS;
-  x = lnR + G;
-  const qkvX = x;
-  [["Q",h],["K",nkv],["V",nkv]].forEach(([nm,dn],i)=>{
-    svg += elbow(lnR, midA, qkvX, mAt(i), `@W${nm.toLowerCase()}`, lnR + G*0.42);
-    svg += box(qkvX, yAt(i), Thead(nm, dn));
+  svg += box(x, yAt(1), Tstream("x", "res", 1)); x += wS;
+  svg += elbow(x, midA, x+A, midA, ""); x += A;
+  svg += box(x, yAt(1)-hBox/2+px(1)/2, Wg("g₁"));   // [d] 的一条，竖直居中
+  x += wG; svg += elbow(x, midA, x+A, midA, "RMSNorm"); x += A;
+  svg += box(x, yAt(1), Tstream("ln1", "", 0)); const lnR = x + wS;
+  x = lnR + A;
+  const wcolX = x;
+  [["W_q", h*dk, "@Wq"],["W_k", nkv*dk, "@Wk"],["W_v", nkv*dk, "@Wv"]].forEach(([nm,co],i)=>{
+    svg += elbow(lnR, midA, wcolX, mAt(i), "", lnR + A*0.45);
+    svg += box(wcolX, yAt(i)-hBox/2+px(d)/2, Wm(nm, d, co, `d=${N(d)}`, N(co)));
   });
-  const qkvR = qkvX + wH;
-  x = qkvR + G;
-  svg += elbow(qkvR, mAt(0), x, midA, "", qkvR + G*0.45);      // Q ┐
-  svg += elbow(qkvR, mAt(1), x, midA, "Q@Kᵀ/√d_k", qkvR + G*0.45); // K ┘
-  svg += box(x, yAt(1), Tsc);  const scR = x + wSC;
-  x = scR + G;
-  svg += elbow(scR, midA, x, midA, "softmax·V");
-  svg += box(x, yAt(1), Tctx);  const ctR = x + wCT;
-  // V 绕过 scores，从第 2 排抬到中间排汇入 ctx
-  svg += elbow(qkvR, mAt(2), x, midA, "", scR + G*0.5);
-  x = ctR + G;
-  svg += elbow(ctR, midA, x, midA, "合并头 @Wo");
-  svg += box(x, yAt(1), Tstream("attn 输出", "", 0));
-  const aOutR = x + wS, aPlus = aOutR + GEO.wPlus/2;
-  svg += elbow(aOutR, midA, aPlus-11, midA, "");
-  svg += skip(M + px(d)/2, yAt(1)-hBox, gTop + GEO.resY, aPlus, midA,
-              "残差捷径：原始 x，不经过 norm");
+  x = wcolX + wWq + A;
+  const qkvX = x;
+  [["Q",h],["K",nkv],["V",nkv]].forEach(([nm,n],i)=>{
+    svg += elbow(wcolX + wWq, mAt(i), qkvX, mAt(i), "@");
+    svg += box(qkvX, yAt(i), Thead(nm, n));
+  });
+  const qkvR = qkvX + wQKV;
+  x = qkvR + A;
+  svg += elbow(qkvR, mAt(0), x, midA, "", qkvR + A*0.45);
+  svg += elbow(qkvR, mAt(1), x, midA, "QKᵀ", qkvR + A*0.45);
+  svg += box(x, yAt(1), Tsc); const scR = x + wSC;
+  x = scR + A;
+  svg += elbow(scR, midA, x, midA, "softmax ·V");
+  svg += box(x, yAt(1), Tctx); const ctR = x + wCT;
+  svg += elbow(qkvR, mAt(2), x, midA, "", scR + A*0.5);       // V 绕过 scores
+  x = ctR + A;
+  svg += elbow(ctR, midA, x, midA, "拼头");
+  svg += box(x, yAt(1)-hBox/2+px(d)/2, Wm("W_o", d, d, `h·d_k=${N(d)}`, `d=${N(d)}`));
+  x += wWq; svg += elbow(x, midA, x+A, midA, "@"); x += A;
+  svg += box(x, yAt(1), Tstream("attn", "", 0));
+  const aPlus = x + wS + GEO.wPlus/2;
+  svg += elbow(x + wS, midA, aPlus-11, midA, "");
+  svg += skip(M + px(d)/2, yAt(1)-hBox, gTop + GEO.resY, aPlus, midA, "残差捷径：原始 x，不经过 norm");
   svg += dot(aPlus, midA, "⊕", 1);
   y = yAt(2) + GEO.labDn + 10;
   svg += `<path class="resline" d="M ${aPlus} ${midA+11} V ${y+12}"/>`;
-  svg += `<rect class="grpbox" x="${M-48}" y="${gTop}" width="${W-2*(M-48)}" height="${y-gTop}" rx="8"/>`
-       + `<text class="grp" x="${M-36}" y="${gTop+20}">自注意力 · ${ATTN[p.attn]}`
-       + `　h=${N(h)}，n_kv=${N(nkv)}，d_k=${N(dk)}</text>`;
+  svg += `<rect class="grpbox" x="${M-44}" y="${gTop}" width="${W-2*(M-44)}" height="${y-gTop}" rx="8"/>`
+       + `<text class="grp" x="${M-32}" y="${gTop+20}">自注意力 · ${ATTN[p.attn]}`
+       + `　h=${N(h)}，n_kv=${N(nkv)}，d_k=${N(dk)}　斜纹 = 权重</text>`;
   y += 14;
   svg += band(`残差流  x ← ⊕ 的输出　（加的是原始 x，不是归一化后的——这就是 pre-norm）`);
 
-  // ── 前馈：门 g 与值 v 上下两排 ──
+  // ── 前馈 ──
   gTop = y; y += GEO.padTop;
   const fTop = y, nR = ff.gated ? 2 : 1;
-  const yFt = f => fTop + f*rowH + GEO.labUp + hBox;
-  const mFt = f => yFt(f) - hBox/2;
-  const midF = mFt((nR-1)/2);
+  const yFt = f => fTop + f*rowH + GEO.labUp + hBox, mFt = f => yFt(f) - hBox/2;
+  const midF = mFt((nR-1)/2), cRow = (nR-1)/2;
   x = M;
-  svg += box(x, yFt((nR-1)/2), Tstream("x", "res", 1));  const fxR = x + wS;
-  x = fxR + G;
-  svg += elbow(fxR, midF, x, midF, "");
-  svg += box(x, yFt((nR-1)/2), Tstream("RMSNorm ln2", "", 0));  const fLnR = x + wS;
-  x = fLnR + G;
+  svg += box(x, yFt(cRow), Tstream("x", "res", 1)); x += wS;
+  svg += elbow(x, midF, x+A, midF, ""); x += A;
+  svg += box(x, midF+px(1)/2, Wg("g₂"));
+  x += wG; svg += elbow(x, midF, x+A, midF, "RMSNorm"); x += A;
+  svg += box(x, yFt(cRow), Tstream("ln2", "", 0)); const fLnR = x + wS;
+  x = fLnR + A;
+  const fwX = x;
+  const wNames = ff.gated ? [["W_1"],["W_3"]] : [["W_in"]];
+  wNames.forEach((nm,i)=>{
+    svg += elbow(fLnR, midF, fwX, mFt(i), "", fLnR + A*0.45);
+    svg += box(fwX, mFt(i)+px(d)/2, Wm(nm[0], d, dff, `d=${N(d)}`, `d_ff=${N(dff)}`));
+  });
+  x = fwX + wWff + A;
   const gvX = x;
-  if(ff.gated){
-    svg += elbow(fLnR, midF, gvX, mFt(0), "@W1", fLnR + G*0.42);
-    svg += elbow(fLnR, midF, gvX, mFt(1), "@W3", fLnR + G*0.42);
-    svg += box(gvX, yFt(0), Tff("门 g"));
-    svg += box(gvX, yFt(1), Tff("值 v"));
-  }else{
-    svg += elbow(fLnR, midF, gvX, mFt(0), "@W_in");
-    svg += box(gvX, yFt(0), Tff("h"));
-  }
+  (ff.gated ? ["g 门","v 值"] : ["h"]).forEach((nm,i)=>{
+    svg += elbow(fwX + wWff, mFt(i), gvX, mFt(i), "@");
+    svg += box(gvX, yFt(i), Tff(nm));
+  });
   const gvR = gvX + wFF;
-  x = gvR + G;
-  // 门那一路单独过激活函数
+  x = gvR + A;
   svg += elbow(gvR, mFt(0), x, mFt(0), ff.act);
   svg += box(x, yFt(0), Tff(`${ff.act}(${ff.gated?"g":"h"})`));
   const actR = x + wFF;
-  x = actR + G;
+  x = actR + A;
+  let prodR;
   if(ff.gated){
-    const cx0 = actR + G*0.5;
-    svg += elbow(actR, mFt(0), x, midF, "", cx0);
-    svg += elbow(gvR,  mFt(1), x, midF, "", cx0);          // 值那一路直连，不过激活
+    const cx0 = actR + A*0.5;
+    svg += elbow(actR, mFt(0), x+30, midF, "", cx0);
+    svg += elbow(gvR,  mFt(1), x+30, midF, "", cx0);
     svg += dot(cx0, midF, "⊙");
-    svg += box(x, yFt(0.5), Tff("g ⊙ v"));
-  }
-  const prodR = ff.gated ? x + wFF : actR;
-  x = prodR + G;
-  svg += elbow(prodR, midF, x, midF, ff.gated?"@W2":"@W_out");
-  svg += box(x, yFt((nR-1)/2), Tstream("ffn 输出", "", 0));
-  const fOutR = x + wS, fPlus = fOutR + GEO.wPlus/2;
-  svg += elbow(fOutR, midF, fPlus-11, midF, "");
-  svg += skip(M + px(d)/2, yFt((nR-1)/2)-hBox, gTop + GEO.resY, fPlus, midF,
-              "残差捷径：原始 x，不经过 norm");
+    svg += box(x+30, yFt(0.5), Tff("g⊙v"));
+    prodR = x + 30 + wFF;
+  }else prodR = actR;
+  x = prodR + A;
+  svg += box(x, midF+px(dff)/2, Wm(ff.gated?"W_2":"W_out", dff, d, `d_ff=${N(dff)}`, `d=${N(d)}`));
+  x += wW2; svg += elbow(x, midF, x+A, midF, "@"); x += A;
+  svg += box(x, yFt(cRow), Tstream("ffn", "", 0));
+  const fPlus = x + wS + GEO.wPlus/2;
+  svg += elbow(x + wS, midF, fPlus-11, midF, "");
+  svg += skip(M + px(d)/2, yFt(cRow)-hBox, gTop + GEO.resY, fPlus, midF, "残差捷径：原始 x，不经过 norm");
   svg += dot(fPlus, midF, "⊕", 1);
   y = yFt(nR-1) + GEO.labDn + 10;
   svg += `<path class="resline" d="M ${fPlus} ${midF+11} V ${y+12}"/>`;
-  svg += `<rect class="grpbox" x="${M-48}" y="${gTop}" width="${W-2*(M-48)}" height="${y-gTop}" rx="8"/>`
-       + `<text class="grp" x="${M-36}" y="${gTop+20}">前馈 · ${ff.label}`
+  svg += `<rect class="grpbox" x="${M-44}" y="${gTop}" width="${W-2*(M-44)}" height="${y-gTop}" rx="8"/>`
+       + `<text class="grp" x="${M-32}" y="${gTop+20}">前馈 · ${ff.label}`
        + `　${ff.n} 个 d×d_ff 矩阵，激活 ${ff.act}${ff.gated?"，门控":"，不门控"}</text>`;
   y += 14;
-  svg += band(`残差流  x = x + ffn 输出　　↻ 以上两个子层重复 L = ${N(L)} 次`);
+  svg += band(`残差流  x ← ⊕ 的输出　　↻ 以上两个子层重复 L = ${N(L)} 次`);
 
   // ── 出口 ──
   yb = y + GEO.labUp + hBox; x = M;
-  svg += box(x, yb, Tstream("RMSNorm ln_final", "res", 1));
-  x += wS;
-  svg += elbow(x, yb-hBox/2, x+G, yb-hBox/2, "@lm_head");
-  x += G;
+  svg += box(x, yb, Tstream("ln_f", "res", 1)); x += wS;
+  svg += elbow(x, yb-hBox/2, x+A, yb-hBox/2, ""); x += A;
+  svg += box(x, yb-hBox/2+px(d)/2, Wm("lm_head", d, V, `d=${N(d)}`, `V=${N(V)}`));
+  x += px(d); svg += elbow(x, yb-hBox/2, x+A, yb-hBox/2, "@"); x += A;
   svg += box(x, yb, {...Tlog, shape:S(B,T,V)});
   y = yb + GEO.labDn + 12;
 
-  // 按容器宽自适应，但不缩到 78% 以下——再小字就看不清了，那时改为横向滚动
   return `<svg viewBox="0 0 ${W} ${y}" width="100%" preserveAspectRatio="xMinYMin meet"
     style="max-width:${Math.round(W)}px; min-width:${Math.round(W*0.78)}px; height:auto">${svg}</svg>`;
 }
