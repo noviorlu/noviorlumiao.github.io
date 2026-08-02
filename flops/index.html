@@ -133,8 +133,21 @@
   .legend i{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px}
 
   /* ── 架构图（几何） ── */
-  .archwrap{overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:6px}
-  .archwrap svg{display:block}
+  .archbar{display:flex; gap:6px; align-items:center; margin-bottom:8px; flex-wrap:wrap}
+  .archbar button{font:12px/1 var(--mono); padding:6px 10px; cursor:pointer; color:var(--muted);
+    background:var(--panel); border:1px solid var(--line); border-radius:6px}
+  .archbar button:hover{border-color:var(--accent); color:var(--accent)}
+  .archbar .hint{font-size:11.5px; color:var(--muted); margin-left:auto}
+  .archcanvas{
+    position:relative; height:600px; min-height:240px; resize:vertical; overflow:hidden;
+    border:1px solid var(--line); border-radius:8px; background:var(--bg);
+    touch-action:none; cursor:grab; user-select:none;
+  }
+  .archcanvas.grabbing{cursor:grabbing}
+  .archcanvas svg{display:block; width:100%; height:100%}
+  .archzoom{position:absolute; right:8px; bottom:8px; font:11px var(--mono); color:var(--muted);
+    background:var(--panel); border:1px solid var(--line); border-radius:5px; padding:2px 7px;
+    pointer-events:none; opacity:.9}
   svg .lbl{font:11px var(--mono); fill:var(--ink)}
   svg .wlbl{font:11px var(--mono); fill:var(--muted); font-style:italic}
   svg .dim{font:10px var(--mono); fill:var(--muted)}
@@ -245,11 +258,19 @@
       <summary><span class="arw">▸</span><span class="num">图</span>
         <span class="ttl">架构：一个 token 走完全程</span><span class="hd" id="hd0"></span></summary>
       <div class="body">
-      <div class="archwrap" id="archwrap"></div>
+      <div class="archbar">
+        <button id="azOut">−</button><button id="azIn">＋</button>
+        <button id="azFit">适应</button><button id="az100">1:1</button>
+        <span class="hint">滚轮缩放 · 拖拽平移 · 双指捏合 · 双击复位</span>
+      </div>
+      <div class="archcanvas" id="archcanvas">
+        <div id="archwrap" style="position:absolute; inset:0"></div>
+        <div class="archzoom" id="azLbl">100%</div>
+      </div>
       <p class="note" style="font-size:12.5px; margin-top:14px">
         <b>每个盒子的边长按 √元素数 画</b>，所以面积大致对应张量的大小，比例是真的、但被开方压缩过
         （否则 <code>V</code> 那一维会把版面撑爆）。真实维度写在盒子旁边，超过上限的那一维画成撕裂边
-        <span style="font-family:var(--mono)">⌇</span>。往盒子上一停能看到精确元素数和字节数。<br>
+        <span style="font-family:var(--mono)">⌇</span>。往盒子上一停能看到精确元素数和字节数。画布可以滚轮缩放、拖着平移，双击复位。<br>
         <span class="tag ok">绿</span> 残差流与它的捷径 &nbsp;
         <span class="tag bad">橙</span> 含 T² 的张量 &nbsp;
         <b>斜纹</b> = 权重矩阵（每层各一份），实心 = 激活张量。<br>
@@ -798,8 +819,118 @@ function drawArch(p, r){
   svg += box(x, yb, {...Tlog, shape:S(B,T,V)});
   y = yb + GEO.labDn + 12;
 
-  return `<svg viewBox="0 0 ${W} ${y}" width="100%" preserveAspectRatio="xMinYMin meet"
-    style="max-width:${Math.round(W)}px; min-width:${Math.round(W*0.78)}px; height:auto">${svg}</svg>`;
+  return `<svg data-w="${W}" data-h="${y}" viewBox="0 0 ${W} ${y}" `
+    + `preserveAspectRatio="xMidYMid meet">${svg}</svg>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  架构图画布：滚轮缩放 / 拖拽平移 / 双指捏合 / 双击复位
+//  做法是直接改 svg 的 viewBox。把 viewBox 的宽高比对齐容器的宽高比之后，
+//  preserveAspectRatio 就不会再产生留白，屏幕像素 ↔ 用户坐标是一个干净的比例。
+// ═══════════════════════════════════════════════════════════
+const AV = {x:0, y:0, w:0, h:0, W:0, H:0, pending:false};
+const avEl = () => $("archwrap").querySelector("svg");
+// 量的必须是 svg 实际占的那个盒（#archwrap 是 inset:0 的内容盒），不是外层容器——
+// 容器有 1px 边框，差这 2px 会让缩放锚点按比例漂。
+const avRect = () => $("archwrap").getBoundingClientRect();
+
+function avApply(){
+  const sv = avEl(), r = avRect();
+  if(!sv || r.width < 10 || AV.w <= 0){ AV.pending = true; return; }
+  AV.pending = false;
+  // 每次都把 viewBox 的宽高比对齐容器（已经对齐时是空操作）。这样 meet 永远不产生
+  // 留白，屏幕像素 ↔ 用户坐标就是精确比例，缩放锚点才钉得住。
+  const cy = AV.y + AV.h/2;
+  AV.h = AV.w / (r.width / r.height);
+  AV.y = cy - AV.h/2;
+  sv.setAttribute("viewBox", `${AV.x.toFixed(3)} ${AV.y.toFixed(3)} ${AV.w.toFixed(3)} ${AV.h.toFixed(3)}`);
+  $("azLbl").textContent = Math.round(r.width/AV.w*100) + "%";
+}
+function avFit(){
+  const r = avRect();
+  if(!AV.W || r.width < 10){ AV.pending = true; return; }
+  const pad = 16;
+  AV.x = -pad; AV.y = -pad; AV.w = AV.W + 2*pad; AV.h = AV.H + 2*pad;
+  const ar = r.width / r.height;                       // 把 viewBox 撑成容器的宽高比
+  if(AV.w/AV.h < ar){ const nw = AV.h*ar; AV.x -= (nw-AV.w)/2; AV.w = nw; }
+  else               { const nh = AV.w/ar; AV.y -= (nh-AV.h)/2; AV.h = nh; }
+  avApply();                                           // apply 里会再校一次宽高比
+}
+function avZoom(k, cx, cy){
+  const r = avRect();
+  if(r.width < 10 || AV.w <= 0) return;
+  const ux = AV.x + (cx - r.left)/r.width  * AV.w;     // 光标落在图上的哪一点
+  const uy = AV.y + (cy - r.top )/r.height * AV.h;
+  const nw = Math.max(AV.W/16, Math.min(AV.W*6, AV.w*k)), kk = nw/AV.w;
+  AV.x = ux - (ux-AV.x)*kk; AV.y = uy - (uy-AV.y)*kk;  // 光标底下那一点保持不动
+  AV.w *= kk; AV.h *= kk;
+  avApply();
+}
+function avPan(dx, dy){
+  const r = avRect();
+  if(r.width < 10) return;
+  AV.x -= dx/r.width*AV.w; AV.y -= dy/r.height*AV.h; avApply();
+}
+function avOne(){                                       // 1:1（一个用户单位 = 一个 css 像素）
+  const r = avRect();
+  if(r.width < 10) return;
+  const cx = AV.x + AV.w/2, cy = AV.y + AV.h/2;
+  AV.w = r.width; AV.h = r.height;
+  AV.x = cx - AV.w/2; AV.y = cy - AV.h/2; avApply();
+}
+function setupCanvas(){
+  const cv = $("archcanvas");
+  cv.addEventListener("wheel", e=>{
+    e.preventDefault();
+    avZoom(Math.exp(e.deltaY * 0.0016), e.clientX, e.clientY);
+  }, {passive:false});
+
+  const pts = new Map();
+  let last = null, lastD = 0;
+  const two = () => [...pts.values()];
+  const dist = () => { const [a,b] = two(); return Math.hypot(a.x-b.x, a.y-b.y); };
+  const mid  = () => { const [a,b] = two(); return {x:(a.x+b.x)/2, y:(a.y+b.y)/2}; };
+
+  cv.addEventListener("pointerdown", e=>{
+    pts.set(e.pointerId, {x:e.clientX, y:e.clientY});
+    cv.setPointerCapture(e.pointerId);
+    cv.classList.add("grabbing");
+    if(pts.size === 1) last = {x:e.clientX, y:e.clientY};
+    if(pts.size === 2) lastD = dist();
+  });
+  cv.addEventListener("pointermove", e=>{
+    if(!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, {x:e.clientX, y:e.clientY});
+    if(pts.size === 1 && last){
+      avPan(e.clientX-last.x, e.clientY-last.y);
+      last = {x:e.clientX, y:e.clientY};
+    }else if(pts.size === 2){
+      const d = dist(), c = mid();
+      if(lastD > 0 && d > 0) avZoom(lastD/d, c.x, c.y);
+      lastD = d;
+    }
+  });
+  ["pointerup","pointercancel"].forEach(t => cv.addEventListener(t, e=>{
+    pts.delete(e.pointerId); lastD = 0;
+    if(pts.size === 0){ last = null; cv.classList.remove("grabbing"); }
+    else last = two()[0];
+  }));
+  cv.addEventListener("dblclick", e=>{ e.preventDefault(); avFit(); });
+
+  $("azIn").addEventListener("click", ()=>{ const r=avRect(); avZoom(1/1.25, r.left+r.width/2, r.top+r.height/2); });
+  $("azOut").addEventListener("click",()=>{ const r=avRect(); avZoom(1.25,   r.left+r.width/2, r.top+r.height/2); });
+  $("azFit").addEventListener("click", avFit);
+  $("az100").addEventListener("click", avOne);
+
+  // 容器可以竖向拉伸；宽高比变了要把 viewBox 跟着改，否则图会被拉扁
+  // 容器可以竖向拉伸；宽高比变了由 avApply 统一校正，这里只要触发一次
+  new ResizeObserver(()=>{
+    if(!AV.W) return;
+    if(AV.pending) avFit(); else avApply();
+  }).observe(cv);
+
+  // 卡片收起时容器尺寸是 0，展开时补一次
+  cv.closest("details").addEventListener("toggle", ()=>{ if(AV.pending) avFit(); });
 }
 
 // 明细表的一行
@@ -842,6 +973,9 @@ function render(){
 
   // ── 几何架构图 ──
   $("archwrap").innerHTML = drawArch(p, r);
+  const sv = avEl(), nW = +sv.dataset.w, nH = +sv.dataset.h;
+  if(nW !== AV.W || nH !== AV.H){ AV.W = nW; AV.H = nH; avFit(); }  // 换了模型 → 重新适应
+  else avApply();                                                   // 只是改了个数 → 视角不动
   $("archNote").innerHTML =
     `<b>残差流全程都是 ${xd}</b>——${N(L)} 层叠下来宽度一次没变。`
     + ` pre-norm 的形状约束就这一条：每个子层只往残差流上<b>加</b>东西，自己内部怎么变宽变窄都行。`
@@ -1094,6 +1228,7 @@ IN.forEach(k=>$(k).addEventListener("input", render));
 SEL.forEach(k=>$(k).addEventListener("change", render));
 $("autoff").addEventListener("change", render);
 
+setupCanvas();
 const CARDS = [...document.querySelectorAll("details.card")];
 $("openAll").addEventListener("click",  ()=>CARDS.forEach(c=>c.open = true));
 $("closeAll").addEventListener("click", ()=>CARDS.forEach(c=>c.open = false));
