@@ -27,6 +27,9 @@
   header p{color:var(--muted); margin:0 0 4px; max-width:70ch}
   header .src{font-size:13px; color:var(--muted)}
   .layout{display:grid; grid-template-columns:290px 1fr; gap:26px; margin-top:26px; align-items:start}
+  /* grid item 默认 min-width:auto，会被内部宽内容（架构图、nowrap 表格）顶宽，
+     让 .archwrap/.scroll 的 overflow-x 失效、整页横向溢出。必须显式归零。 */
+  .layout > *{min-width:0}
   @media (max-width:900px){ .layout{grid-template-columns:1fr} }
 
   .panel{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px}
@@ -115,6 +118,31 @@
   .legend{display:flex; flex-wrap:wrap; gap:14px; font-size:12px; color:var(--muted)}
   .legend i{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px}
 
+  /* ── 架构图 ── */
+  .arch{font:12.5px/1.5 var(--mono); min-width:560px}
+  .archwrap{overflow-x:auto; -webkit-overflow-scrolling:touch}
+  .arow,.ahead{display:grid; grid-template-columns:1fr 132px 92px 84px; gap:10px; align-items:center}
+  .arow{padding:3px 8px; border-radius:5px}
+  .arow:hover{background:var(--code)}
+  .arow .nm{white-space:pre; color:var(--ink)}
+  .arow .sh{text-align:right; color:var(--accent); white-space:nowrap}
+  .arow .fl{text-align:right; color:var(--muted); white-space:nowrap}
+  .arow .pb{position:relative; height:17px; background:var(--code); border-radius:3px; overflow:hidden}
+  .arow .pb i{position:absolute; left:0; top:0; bottom:0; background:var(--accent-soft); border-left:2px solid var(--accent)}
+  .arow .pb b{position:relative; display:block; text-align:center; font:10.5px/17px var(--mono); font-weight:500; color:var(--muted)}
+  .arow.free .nm,.arow.free .sh{color:var(--muted)}
+  .arow.hot .nm{color:var(--warn); font-weight:600}
+  .arow.hot .sh{color:var(--warn)}
+  .arow.hot .pb i{background:var(--warn-soft); border-left-color:var(--warn)}
+  .arow.res{background:var(--accent-soft)}
+  .arow.res .nm{color:var(--accent); font-weight:600}
+  .ahead{padding:0 8px 6px; font:11px var(--mono); color:var(--muted); letter-spacing:.03em}
+  .ahead span:nth-child(2),.ahead span:nth-child(3){text-align:right}
+  .ahead span:nth-child(4){text-align:center}
+  .ablk{border:1px dashed var(--accent); border-radius:8px; padding:12px 6px 6px; margin:10px 0; position:relative}
+  .albl{position:absolute; top:-9px; left:14px; background:var(--panel); padding:0 7px;
+    font:11px var(--mono); font-weight:700; color:var(--accent)}
+
   .tag{display:inline-block; padding:1px 7px; border-radius:4px; font:11px var(--mono); font-weight:600}
   .tag.ok{background:var(--accent-soft); color:var(--accent)}
   .tag.bad{background:var(--warn-soft); color:var(--warn)}
@@ -168,6 +196,22 @@
       <button id="closeAll">全部收起</button>
       <span class="hint">收起时右侧仍是实时结果，改配置即刷新</span>
     </div>
+
+    <details class="card" open>
+      <summary><span class="arw">▸</span><span class="num">图</span>
+        <span class="ttl">架构：一个 token 走完全程</span><span class="hd" id="hd0"></span></summary>
+      <div class="body">
+      <div class="archwrap"><div class="arch" id="arch"></div></div>
+      <p class="note" id="archNote"></p>
+      <p class="note" style="font-size:12.5px">
+        <span class="tag ok">绿</span> 残差流本身
+        <span class="tag bad">橙</span> 含 T² 的项
+        灰 = 逐元素或查表，FLOPs 可忽略。<br>
+        末列的百分比是该算子占<b>一次前向总 FLOPs</b> 的真实比例（块内的已乘 L），
+        <b>把带数字的行全加起来正好 100%</b>；条长则是按全图最大项归一后的相对值——
+        否则最大也才 19%，全挤在左边看不出差别。</p>
+      </div>
+    </details>
 
     <details class="card">
       <summary><span class="arw">▸</span><span class="num">1</span>
@@ -351,6 +395,25 @@ function stack(barEl, legEl, items){
     `<span><i style="background:${COLORS[i%COLORS.length]}"></i>${it.k} ${(it.v/tot*100).toFixed(1)}%</span>`).join("");
 }
 
+// 架构图的一行：名字 / 输出形状 / FLOPs / 占前向总量
+// mul  ：块内算子要乘 L 才是它在整个前向里的占比
+// peak ：全图最大的那一项的占比，条按它归一（数字仍是真实占比）
+function arows(items, F, mul=1, peak=1){
+  return items.map(it=>{
+    const f = it.f === undefined ? "" : (it.f === 0 ? "0" : flops(it.f));
+    const share = it.f ? it.f*mul/F : 0;
+    const bar = share
+      ? `<i style="width:${Math.min(100, share/peak*100).toFixed(2)}%"></i><b>${pct(share)}</b>`
+      : (it.f === 0 ? `<b>—</b>` : "");
+    return `<div class="arow ${it.cls||""}">`
+      + `<span class="nm">${it.n}</span>`
+      + `<span class="sh">${it.s||""}</span>`
+      + `<span class="fl">${f}</span>`
+      + `<span class="pb">${bar}</span>`
+      + `</div>`;
+  }).join("");
+}
+
 // ── 核心：所有公式都在这里 ──────────────────────────────
 function compute(p){
   const {V,T,L,d,h,dff,B,bpe} = p;
@@ -400,6 +463,57 @@ function render(){
   if($("autoff").checked){ p.dff = Math.round(8/3*p.d/64)*64; $("dff").value = p.dff; }
   const {V,T,L,d,h,dff,B,bpe} = p;
   const r = compute(p);
+
+  // 图、架构：一个 token 走完全程
+  const N = x => String(Math.round(x));
+  const dk = d/h, dkS = Number.isInteger(dk) ? N(dk) : fmt(dk,2);
+  const S = (...a) => "[" + a.join(", ") + "]";
+  const xd = S(N(B), N(T), N(d));                       // 残差流形状
+  // 条按全图最大项归一，否则最大也才 19%，全挤在左边看不出差别
+  const peak = Math.max(r.f_proj1*L, r.f_score*L, r.f_ff1*L, r.f_lm) / r.F;
+  $("arch").innerHTML =
+    `<div class="ahead"><span>算子</span><span>输出形状</span><span>FLOPs</span><span>占前向</span></div>`
+    + arows([
+      {n:"输入 token ids",                s:S(N(B),N(T)),               f:0, cls:"free"},
+      {n:"token_embeddings   weight[x]", s:xd,                         f:0, cls:"free"},
+      {n:"残差流 x   ← 往下宽度恒为 d",     s:xd,                              cls:"res"},
+    ], r.F, 1, peak)
+    + `<div class="ablk"><div class="albl">× L = ${N(L)} 层（FLOPs 列是单层，进度条已 ×L）</div>`
+    + arows([
+      {n:"┌ RMSNorm ln1",             s:xd,                          f:0, cls:"free"},
+      {n:"│  x @ Wq",                 s:S(N(B),N(h),N(T),dkS),       f:r.f_proj1},
+      {n:"│  x @ Wk",                 s:S(N(B),N(h),N(T),dkS),       f:r.f_proj1},
+      {n:"│  x @ Wv",                 s:S(N(B),N(h),N(T),dkS),       f:r.f_proj1},
+      {n:"│  RoPE(Q), RoPE(K)",       s:S(N(B),N(h),N(T),dkS),       f:0, cls:"free"},
+      {n:"│  Q @ Kᵀ / √d_k",          s:S(N(B),N(h),N(T),N(T)),      f:r.f_score, cls:"hot"},
+      {n:"│  masked_fill,  softmax",  s:S(N(B),N(h),N(T),N(T)),      f:0, cls:"free"},
+      {n:"│  scores @ V",             s:S(N(B),N(h),N(T),dkS),       f:r.f_score, cls:"hot"},
+      {n:"│  合并头  rearrange",       s:xd,                          f:0, cls:"free"},
+      {n:"└  @ Wo",                   s:xd,                          f:r.f_proj1},
+      {n:"x = x + attn",              s:xd,                          f:0, cls:"res"},
+      {n:"┌ RMSNorm ln2",             s:xd,                          f:0, cls:"free"},
+      {n:"│  x @ W1   （门）",          s:S(N(B),N(T),N(dff)),         f:r.f_ff1},
+      {n:"│  x @ W3   （值）",          s:S(N(B),N(T),N(dff)),         f:r.f_ff1},
+      {n:"│  SiLU(门) ⊙ 值",           s:S(N(B),N(T),N(dff)),         f:0, cls:"free"},
+      {n:"└  @ W2",                   s:xd,                          f:r.f_ff1},
+      {n:"x = x + ffn",               s:xd,                          f:0, cls:"res"},
+    ], r.F, L, peak)
+    + `</div>`
+    + arows([
+      {n:"RMSNorm ln_final",              s:xd,                    f:0, cls:"free"},
+      {n:"@ lm_head   ← 全程最宽的张量",    s:S(N(B),N(T),N(V)),     f:r.f_lm},
+      {n:"softmax / cross-entropy",       s:S(N(B),N(T),N(V)),     f:0, cls:"free"},
+    ], r.F, 1, peak);
+
+  $("archNote").innerHTML =
+    `<b>残差流全程都是 ${xd}</b>——${N(L)} 层叠下来宽度一次没变。`
+    + ` pre-norm 的形状约束就这一条：每个子层只往残差流上<b>加</b>东西，自己内部怎么变宽变窄都行。`
+    + ` 中间那些 <code>d_ff=${N(dff)}</code>、<code>[.., ${N(h)}, ${N(T)}, ${dkS}]</code> 都是子层内部的事，出门必须变回 d。`
+    + `<br>橙色两行是<b>整个前向里 T 唯一出现两次的地方</b>：打分矩阵 ${S(N(B),N(h),N(T),N(T))} 有 `
+    + `${int(B*h*T*T)} 个元素，是残差流的 <b>${fmt(h*T/d,1)} 倍</b>（比值 = h·T/d）。`
+    + ` 它在 FLOPs 上只占 ${pct(r.blocks[2].v/r.F)}，在显存上却是第 5 段的大头。`
+    + `<br>出口 <code>logits</code> ${S(N(B),N(T),N(V))} 是全程最宽的张量，比残差流宽 <b>V/d = ${fmt(V/d,1)} 倍</b>，`
+    + ` 而它只经过一次矩阵乘就吃掉 ${pct(r.f_lm/r.F)} 的前向 FLOPs。`;
 
   // 一、参数量
   tbl($("tParams"),
@@ -525,6 +639,7 @@ function render(){
     ` 当前 T=${int(T)} ${T<Tstar?"<b>还在线性区</b>":"<b>已经进入平方区</b>"}。`;
 
   // ── 卡片收起时的一行结论 ──
+  hd(0, `${N(L)} 层 · 残差流 ${xd} · d_k=${dkS}`);
   hd(1, `P = ${cnt(r.P)} · 权重 ${bytes(bpe*r.P)}`);
   hd(2, `${flops(r.F)} / 次前向`);
   hd(3, `最大块 ${big.k} ${pct(big.v/r.F)}`);
