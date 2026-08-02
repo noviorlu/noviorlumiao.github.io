@@ -241,6 +241,8 @@
     <div class="derived" id="ffnDer"></div>
 
     <h2 style="margin-top:22px">硬件</h2>
+    <div class="presets" id="gpus"></div>
+    <div class="derived" id="gpuDer"></div>
     <div class="field"><label>batch_size <small>B</small></label><input id="B" type="number" value="1"></div>
     <div class="field"><label>每个数几字节 <small>bytes</small></label>
       <select id="bpe"><option value="4">fp32 · 4</option><option value="2">bf16/fp16 · 2</option></select></div>
@@ -248,8 +250,10 @@
     <div class="field"><label>峰值算力 <small>TFLOP/s</small></label><input id="peak" type="number" value="495"></div>
     <div class="field"><label>显存带宽 <small>TB/s</small></label><input id="bw" type="number" value="3.35" step="0.01"></div>
     <div class="field"><label>MFU <small>0–1</small></label><input id="mfu" type="number" value="0.5" step="0.05"></div>
-    <div class="field"><label>训练步数 <small>steps</small></label><input id="steps" type="number" value="400000"></div>
     <div class="field"><label>训练 batch <small>只用于第 7 段</small></label><input id="tB" type="number" value="1024"></div>
+    <div class="field"><label>目标 token 数 <small>单位：十亿（B）</small></label><input id="Dtok" type="number" value="419.43" step="0.01"></div>
+    <div class="presets" id="ratios" style="margin:-4px 0 10px"></div>
+    <div class="derived" id="tokDer"></div>
     <p class="note" style="font-size:12px; margin:6px 0 0">上面的 <code>B</code> 是<b>单卡</b>放得下的 batch（第 5 段用），
     这里的是<b>全局</b> batch（第 7 段用）。两者相差的倍数就是梯度累积 × 数据并行。</p>
   </aside>
@@ -423,7 +427,7 @@ AI &gt; 平衡点 → compute-bound（算力吃满）    AI &lt; 平衡点 → m
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const IN = ["V","T","L","d","h","nkv","dk","dff","B","bpe","vram","peak","bw","mfu","steps","tB"];
+const IN = ["V","T","L","d","h","nkv","dk","dff","B","bpe","vram","peak","bw","mfu","tB","Dtok"];
 const SEL = ["attn","ffn"];
 
 // 预设：形状 + 变体。参数量已对着公开数字核过，见第 1 段末尾那行自检。
@@ -453,6 +457,14 @@ const FFN = {
   mlp:   {n:2, act:"GELU",  gated:false, label:"MLP"},
 };
 const ATTN = {mha:"MHA", gqa:"GQA", mqa:"MQA"};
+// 峰值一律是「稠密」峰值（不含 2:1 sparsity 的翻倍）。tf32 用作默认，因为笔记
+// §5.4.12 那个 202 天就是按 H100 的 495 TFLOP/s 算的。
+// 消费卡要注意：FP32 累加的张量核吞吐只有 FP16 累加的一半，训练用的是前者。
+const GPUS = {
+  "RTX 5090": {vram:32,  bw:1.79, tf32:105,  bf16:210,  fp8:419,  mem:"32 GB GDDR7"},
+  "H100 SXM": {vram:80,  bw:3.35, tf32:495,  bf16:990,  fp8:1979, mem:"80 GB HBM3"},
+  "B200":     {vram:192, bw:8.0,  tf32:1100, bf16:2250, fp8:4500, mem:"192 GB HBM3e"},
+};
 const COLORS = ["#3d7f5e","#5f9ea0","#c08552","#8a7aa8","#b0563f"];
 
 const fmt = (n,p=2) => n.toLocaleString("en-US",{minimumFractionDigits:p,maximumFractionDigits:p});
@@ -1262,6 +1274,14 @@ KV cache（推理，不是训练）= bytes · <b>2·L·B·T·d_kv</b>`;
 
   // ── 六、AI ──
   const balance = p.peak/p.bw;              // TFLOP/s ÷ TB/s = FLOP/byte
+  const gpu = Object.entries(GPUS).find(([,g]) =>
+      g.vram === p.vram && Math.abs(g.bw - p.bw) < 0.02);
+  $("gpuDer").innerHTML = gpu
+    ? `<b>${gpu[0]}</b>　${gpu[1].mem}　带宽 ${fmt(gpu[1].bw,2)} TB/s<br>`
+      + `稠密峰值：tf32 <b>${N(gpu[1].tf32)}</b>　bf16 <b>${N(gpu[1].bf16)}</b>　`
+      + `fp8 <b>${N(gpu[1].fp8)}</b> TFLOP/s（点上面的按钮填的是 tf32）<br>`
+      + `机器平衡点 = 峰值/带宽 = <b>${fmt(balance,0)}</b> FLOP/byte`
+    : `峰值/带宽/显存可以随便改。机器平衡点 = 峰值/带宽 = <b>${fmt(balance,0)}</b> FLOP/byte`;
   tbl($("tAI"), ["操作","AI = FLOPs/字节 的符号式","FLOPs","HBM 字节","AI (FLOP/byte)","判定"],
     r.ai.map(a=>[a.k, a.sym+" ÷ bytes", flops(a.f), bytes(a.b), fmt(a.v,1),
       a.v>balance?'<span class="tag ok">compute-bound</span>':'<span class="tag bad">memory-bound</span>']));
@@ -1275,9 +1295,14 @@ KV cache（推理，不是训练）= bytes · <b>2·L·B·T·d_kv</b>`;
     ` 解码时 T=1，投影的 AI 降到 <code>2d/((2+d)·bytes) ≈ ${fmt(decAI,2)}</code>，极度 memory-bound——这是自回归生成慢的根本原因。`;
 
   // ── 七、时间 ──
-  const totalF = stepF*p.tB*p.steps, sec = totalF/(p.peak*1e12*p.mfu);
+  const D = Math.max(0, p.Dtok)*1e9;                 // 目标 token 总数
+  const steps = (p.tB*T) > 0 ? D/(p.tB*T) : 0;       // 步数是推出来的，不是填的
+  const totalF = stepF*p.tB*steps, sec = totalF/(p.peak*1e12*p.mfu);
+  const approx6ND = 6*r.P*D;                          // 教科书的 6ND：忽略了注意力的 T² 项
   $("kTime").innerHTML = [
     ["总算力","3·F·batch·steps", flops(totalF)],
+    ["训练步数","D / (batch·T)", int(steps)],
+    ["6·N·D 近似","忽略注意力的 T²", flops(approx6ND)+`（低估 ${pct(1-approx6ND/totalF)}）`],
     ["有效算力",`${fmt(p.peak,0)}×${p.mfu}`, fmt(p.peak*p.mfu,0)+" TFLOP/s"],
     ["单卡耗时","总量/有效算力", dur(sec)],
     ["两周训完需要","耗时 / 14 天", fmt(sec/(14*86400),1)+" 张卡"],
@@ -1286,6 +1311,17 @@ KV cache（推理，不是训练）= bytes · <b>2·L·B·T·d_kv</b>`;
     ? `全局 batch 是 <b>${int(p.tB)}</b>，而第 5 段算出单卡最多放 <b>${int(maxB)}</b>——`+
       (p.tB>maxB?`相差 <b>${fmt(p.tB/maxB,0)} 倍</b>，`:"")+`这就是梯度累积和数据并行存在的理由。`
     : `当前配置下单卡连 batch=1 都放不下，必须切分模型。`;
+
+  // ── token 预算：和参数量的比值 ──
+  const Dtot = Math.max(0, p.Dtok)*1e9, ratio = Dtot/r.P;
+  const verdict = ratio < 15 ? ["bad","欠训——还没到 Chinchilla 的算力最优点"]
+                : ratio < 40 ? ["ok","Chinchilla 附近（≈20× 是同等算力下 loss 最低的配比）"]
+                : ratio < 300 ? ["ok","过训——现在主流的做法，为了推理时更省"]
+                : ["ok","严重过训——Llama-3-8B 是 1875×，小模型灌大数据"];
+  $("tokDer").innerHTML =
+      `D = <b>${cnt(Dtot)}</b> tokens　P = ${cnt(r.P)}<br>`
+    + `<b>D / P = ${fmt(ratio,0)}×</b>　<span class="tag ${verdict[0]}">${verdict[1]}</span><br>`
+    + `推出步数 = D/(batch·T) = <b>${int(steps)}</b>`;
 
   // ── 八、上下文缩放 ──
   $("eqTstar").innerHTML =
@@ -1333,6 +1369,24 @@ ${p.attn==="mha"&&dq===d&&ff.gated&&Math.abs(dff-8/3*d)<64 ? "  MHA + d_q=d + �
 
 // 初始化
 $("presets").innerHTML = Object.keys(PRESETS).map(k=>`<button data-p="${k}">${k}</button>`).join("");
+$("gpus").innerHTML = Object.keys(GPUS).map(k=>`<button data-g="${k}">${k}</button>`).join("");
+$("ratios").innerHTML = [20,100,1000].map(k=>`<button data-r="${k}">${k}×P</button>`).join("")
+  + `<button data-r="0">笔记的 40 万步</button>`;
+$("ratios").addEventListener("click", e=>{
+  const k = +e.target.dataset.r; if(!e.target.dataset.r) return;
+  // 需要先知道当前的 P，所以借一次 compute
+  const q = {}; IN.forEach(f => q[f] = parseFloat($(f).value) || 0);
+  SEL.forEach(f => q[f] = $(f).value);
+  const P = compute(q).P;
+  $("Dtok").value = k ? +(k*P/1e9).toFixed(2) : +(400000*q.tB*q.T/1e9).toFixed(2);
+  render();
+});
+$("gpus").addEventListener("click", e=>{
+  const k = e.target.dataset.g; if(!k) return;
+  const g = GPUS[k];
+  $("vram").value = g.vram; $("bw").value = g.bw; $("peak").value = g.tf32;
+  render();
+});
 $("presets").addEventListener("click", e=>{
   const k = e.target.dataset.p; if(!k) return;
   const P = PRESETS[k];
