@@ -682,7 +682,8 @@ function drawArch(p, r){
   // 权重：每层各一份
   const Wn = (name, std, dims, o={}) => ({name: std ? `${name} · ${std}` : name,
       symL:sym(dims), numL:num(dims), weight:1, deep:1,
-      rows:dims[0][1], cols:dims[dims.length-1][1], cols_l:o.cols_l,
+      rows: dims.length > 1 ? dims[0][1] : 1,        // 一维的权重是一条，不是方阵
+      cols: dims[dims.length-1][1], cols_l:o.cols_l,
       title:`权重 ${name}${std?`（${std}）`:""} ${sym(dims)} = ${num(dims)}\n${int(els(dims))} 个参数 · ${bytes(p.bpe*els(dims))}（每层一份）`});
 
   const Dst = [["batch",B],["T",T],["d_model",d]];
@@ -699,12 +700,14 @@ function drawArch(p, r){
   const Tff   = nm => Tn(nm, [["batch",B],["T",T],["d_ff",dff]], {cols:dff, cols_l:`d_ff=${N(dff)}`});
   const Tlog  = Tn("logits", [["batch",B],["T",T],["V",V]], {cols:V, cols_l:`V=${N(V)}${cut(V)?" ⌇":""}`});
   const Tids  = Tn("token ids", [["batch",B],["T",T]], {cols:1, rows_l:`T=${N(T)}`});
-  const Wg    = nm => Wn(nm, "", [["d_model",d]], {cols_l:`d=${N(d)}`});
+  // RMSNorm 的权重是一条长度 d 的向量，逐元素乘上去（对 batch 和 T 广播）。
+  // 写成 1×d，和画出来的窄带对得上。
+  const Wg    = (nm, std) => Wn(nm, std, [["1",1],["d_model",d]], {cols_l:`d=${N(d)}`});
 
   // ── 每段的列表：一列里可以有多个盒子，分别落在不同的排 ──
   const attnCols = [
     [[1, Tx(1)]],
-    [[1, Wg("g₁")]],
+    [[1, Wg("γ₁", "ln1.weight")]],
     [[1, Tstm("ln1")]],
     [[0, Wn("W_q","q_proj",[["d_model",d],["d_q",dq]])],
      [1, Wn("W_k","k_proj",[["d_model",d],["d_kv",dkv]])],
@@ -718,7 +721,7 @@ function drawArch(p, r){
   ];
   const gated = ff.gated;
   const ffnCols = gated ? [
-    [[.5, Tx(1)]], [[.5, Wg("g₂")]], [[.5, Tstm("ln2")]],
+    [[.5, Tx(1)]], [[.5, Wg("γ₂", "ln2.weight")]], [[.5, Tstm("ln2")]],
     [[0, Wn("W_1","gate_proj",[["d_model",d],["d_ff",dff]])],
      [1, Wn("W_3","up_proj",  [["d_model",d],["d_ff",dff]])]],
     [[0, Tff("g 门")], [1, Tff("v 值")]],
@@ -727,7 +730,7 @@ function drawArch(p, r){
     [[.5, Wn("W_2","down_proj",[["d_ff",dff],["d_model",d]])]],
     [[.5, Tstm("ffn 输出")]],
   ] : [
-    [[0, Tx(1)]], [[0, Wg("g₂")]], [[0, Tstm("ln2")]],
+    [[0, Tx(1)]], [[0, Wg("γ₂", "ln2.weight")]], [[0, Tstm("ln2")]],
     [[0, Wn("W_in","up_proj",[["d_model",d],["d_ff",dff]])]],
     [[0, Tff("h")]], [[0, Tff(`${ff.act}(h)`)]],
     [[0, Wn("W_out","down_proj",[["d_ff",dff],["d_model",d]])]],
@@ -825,7 +828,7 @@ function drawArch(p, r){
   const xB = B_(LA,0), gB = B_(LA,1), lnB = B_(LA,2);
   svg += loop(xB.bx + px(d)/2, yb(xB.t, mA) - px(T), gTop - 24, `残差流 x ${sym(Dst)} = ${num(Dst)}`);
   svg += elbow(xB.bx+boxW(xB.t), mA, gB.bx, mA, "");
-  svg += elbow(gB.bx+boxW(gB.t), mA, lnB.bx, mA, "RMSNorm");
+  svg += elbow(gB.bx+boxW(gB.t), mA, lnB.bx, mA, "RMSNorm ×γ₁");
   const lnR = lnB.bx + boxW(lnB.t), wc = LA.cols[3], qc = LA.cols[4];
   for(let i=0;i<3;i++){
     const wI = wc.items[i], qI = qc.items[i], mi = G.at(i);
@@ -861,7 +864,7 @@ function drawArch(p, r){
   svg += loop(fx.bx + px(d)/2, yb(fx.t, mF) - px(T), gTop - 24,
               `残差流 x ← ⊕ 的输出（加的是原始 x，不是归一化后的——pre-norm）`);
   svg += elbow(fx.bx+boxW(fx.t), mF, fg.bx, mF, "");
-  svg += elbow(fg.bx+boxW(fg.t), mF, fln.bx, mF, "RMSNorm");
+  svg += elbow(fg.bx+boxW(fg.t), mF, fln.bx, mF, "RMSNorm ×γ₂");
   const flnR = fln.bx + boxW(fln.t), fw = LF.cols[3], fv = LF.cols[4];
   fw.items.forEach((wI,i)=>{
     const mi = G.at(wI.rw), vI = fv.items[i];
