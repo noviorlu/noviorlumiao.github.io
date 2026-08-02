@@ -278,9 +278,12 @@
         <span class="tag bad">橙</span> 含 T² 的张量 &nbsp;
         <b>斜纹</b> = 权重矩阵（每层各一份），实心 = 激活张量。<br>
         <b>多头画成往右后方摞起来的切片，一片就是一个头</b>（头多于 6 个时只画 6 片，
-        真实头数标在右上角）。Q / K / V / ctx / scores 都是这样。<br>
-        每摞下面那条细横杠是<b>这些头拼接后有多宽</b>：Q 拼起来正好等于残差流的 d
-        （h·d_k = d），而 <b>GQA 下 K、V 的横杠明显比 Q 短</b>——省下的就是 KV cache。
+        真实头数标在右上角）。Q / K / V / scores / ctx 都是这样。<br>
+        <b>每个头有自己的颜色</b>，从 Q/K/V 一路带到 ctx，再带到「拼接后」那个盒子里的
+        对应一段——<b>「拼头」就是把这 h 片沿特征维接成一条</b>，颜色能直接对上，
+        接完宽度正好回到 <code>h·d_k = d</code>，才能喂给 W_o。<br>
+        每摞下面那条细横杠也是<b>这些头拼接后有多宽</b>：Q 拼起来正好等于残差流的 d，
+        而 <b>GQA 下 K、V 的横杠只有 Q 的 n_kv/h</b>——省下的就是 KV cache。
         右上角的小坐标轴标了三个方向分别是什么维。<br>
         绿色的线就是<b>残差流本身</b>：它从上一段的 ⊕ 一路接到下一个子层的入口，中途还分出一条<b>捷径</b><b>绕过整个子层</b>直接落到 ⊕。注意捷径取的是
         <b>进 RMSNorm 之前的原始 x</b>——归一化只作用在子层内部这一支上，残差通路始终是干净的，
@@ -571,6 +574,9 @@ const px  = n => Math.max(GEO.min, Math.min(GEO.max, GEO.k*Math.sqrt(Math.max(n,
 const cut = n => GEO.k*Math.sqrt(Math.max(n,1)) > GEO.max;
 const dep = n => Math.max(GEO.dmin, Math.min(GEO.dmax, 2.2*Math.sqrt(Math.max(n,1))));
 const nSlab = n => Math.max(1, Math.min(GEO.hmax, Math.round(n)));
+// 每个头一个固定色相：Q/K/V 的第 i 片、scores 的第 i 片、ctx 的第 i 片、
+// 以及拼接后第 i 段，都用同一个颜色 —— 拼头这一步就不用画交叉连线了
+const headFill = i => `hsl(${(196 + i*31) % 360} 48% 52% / .34)`;
 const runX  = t => t.heads > 1 ? (nSlab(t.heads)-1)*GEO.hsx : 0;
 const riseY = t => t.heads > 1 ? (nSlab(t.heads)-1)*GEO.hsy : 0;
 const boxW  = t => px(t.cols) + runX(t) + dep(t.deep||1)*0.62;
@@ -600,8 +606,8 @@ function box(x, yBase, t){
     const k = nSlab(t.heads);
     for(let i=k-1;i>=1;i--){
       const gx = x + i*GEO.hsx, gy = y - i*GEO.hsy;
-      s += `<rect x="${gx}" y="${gy}" width="${w}" height="${hh}" fill="${flat}" `
-         + `stroke="${line}" stroke-width="1" opacity="${(0.5 - i*0.045).toFixed(2)}"/>`
+      s += `<rect x="${gx}" y="${gy}" width="${w}" height="${hh}" fill="${headFill(i)}" `
+         + `stroke="${line}" stroke-width="1" opacity="${(0.92 - i*0.07).toFixed(2)}"/>`
          + `<line x1="${gx}" y1="${gy+hh}" x2="${x+(i-1)*GEO.hsx}" y2="${y-(i-1)*GEO.hsy+hh}" `
          + `stroke="${line}" stroke-width=".7" opacity=".45"/>`;
     }
@@ -611,6 +617,14 @@ function box(x, yBase, t){
        + `<polygon points="${P([x+w,y],[x+w+ox,y-oy],[x+w+ox,y+hh-oy],[x+w,y+hh])}" fill="${flat}" stroke="${line}" stroke-width="1" opacity=".72"${dash}/>`;
   }
   s += `<rect class="fc" x="${x}" y="${y}" width="${w}" height="${hh}" fill="${fill}" stroke="${line}" stroke-width="1.3"${dash}/>`;
+  if(t.heads > 1)                       // 最前面那片是第 0 个头，也要上色
+    s += `<rect x="${x}" y="${y}" width="${w}" height="${hh}" fill="${headFill(0)}" pointer-events="none"/>`;
+  if(t.segs > 1){                       // 拼接后：一段一个头，颜色和上面的切片对应
+    const sw = w/t.segs;
+    for(let i=0;i<t.segs;i++)
+      s += `<rect x="${x+i*sw}" y="${y}" width="${sw}" height="${hh}" fill="${headFill(i)}" `
+         + `stroke="${line}" stroke-width=".8" pointer-events="none"/>`;
+  }
   if(!t.weight){
     const nv = Math.max(2, Math.min(6, Math.round(w/9))), nh = Math.max(2, Math.min(6, Math.round(hh/9)));
     for(let i=1;i<nv;i++) s += `<line class="grid" x1="${x+w*i/nv}" y1="${y}" x2="${x+w*i/nv}" y2="${y+hh}"/>`;
@@ -645,7 +659,7 @@ function drawArch(p, r){
 
   // 张量：dims 是 [维度名, 数值] 的列表，上面两行标签由它生成
   const Tn = (name, dims, o={}) => ({name, symL:sym(dims), numL:num(dims),
-      rows:o.rows ?? T, cols:o.cols, deep:o.deep ?? B, heads:o.heads, cls:o.cls,
+      rows:o.rows ?? T, cols:o.cols, deep:o.deep ?? B, heads:o.heads, segs:o.segs, cls:o.cls,
       cols_l:o.cols_l, rows_l:o.rows_l, catW:o.catW, catL:o.catL,
       title:`激活张量 ${name} ${sym(dims)} = ${num(dims)}\n${int(els(dims))} 个元素 · ${bytes(p.bpe*els(dims))}`});
   // 权重：每层各一份
@@ -662,6 +676,9 @@ function drawArch(p, r){
   const Tsc   = Tn("scores", [["batch",B],["h",h],["T",T],["T",T]], {cols:T, heads:h, cls:"hot", cols_l:`T=${N(T)}`});
   const Tctx  = Tn("ctx", [["batch",B],["h",h],["T",T],["d_k",dk]],
                     {cols:dk, heads:h, cls:"hot", cols_l:`d_k=${N(dk)}`, catW:h*dk, catL:N(d)});
+  // 拼头之后：h 片沿特征维接成一条，宽度正好回到 d。段的颜色和 ctx 的切片一一对应。
+  const Tcat  = Tn("拼接后", [["batch",B],["T",T],["h·d_k",h*dk]],
+                    {cols:h*dk, cls:"hot", segs:nSlab(h), cols_l:`${N(h)}×${N(dk)}=${N(d)}`});
   const Tff   = nm => Tn(nm, [["batch",B],["T",T],["d_ff",dff]], {cols:dff, cols_l:`d_ff=${N(dff)}`});
   const Tlog  = Tn("logits", [["batch",B],["T",T],["V",V]], {cols:V, cols_l:`V=${N(V)}${cut(V)?" ⌇":""}`});
   const Tids  = Tn("token ids", [["batch",B],["T",T]], {cols:1, rows_l:`T=${N(T)}`});
@@ -678,6 +695,7 @@ function drawArch(p, r){
     [[0, Thd("Q",h,0)], [1, Thd("K",nkv,1)], [2, Thd("V",nkv,1)]],
     [[1, Tsc]],
     [[1, Tctx]],
+    [[1, Tcat]],
     [[1, Wn("W_o","o_proj",[["h·d_k",h*dk],["d_model",d]])]],
     [[1, Tstm("attn 输出")]],
   ];
@@ -795,13 +813,14 @@ function drawArch(p, r){
     svg += elbow(lnR, mA, wI.bx, mi, "", lnR + A*0.45);
     svg += elbow(wI.bx+boxW(wI.t), mi, qI.bx, mi, "@");
   }
-  const qR = qc.x + qc.w, scI = B_(LA,5), ctI = B_(LA,6), woI = B_(LA,7), atI = B_(LA,8);
+  const qR = qc.x + qc.w, scI = B_(LA,5), ctI = B_(LA,6), caI = B_(LA,7), woI = B_(LA,8), atI = B_(LA,9);
   svg += elbow(qc.items[0].bx+boxW(qc.items[0].t), G.at(0), scI.bx, mA, "", qR + A*0.3);
   svg += elbow(qc.items[1].bx+boxW(qc.items[1].t), G.at(1), scI.bx, mA, "QKᵀ");
   svg += elbow(scI.bx+boxW(scI.t), mA, ctI.bx, mA, "softmax ·V");
   svg += elbow(qc.items[2].bx+boxW(qc.items[2].t), G.at(2), ctI.bx, mA, "",
                scI.bx + boxW(scI.t) + A*0.5);
-  svg += elbow(ctI.bx+boxW(ctI.t), mA, woI.bx, mA, "拼头");
+  svg += elbow(ctI.bx+boxW(ctI.t), mA, caI.bx, mA, "拼头 rearrange");
+  svg += elbow(caI.bx+boxW(caI.t), mA, woI.bx, mA, "");
   svg += elbow(woI.bx+boxW(woI.t), mA, atI.bx, mA, "@");
   const aP = LA.right + GEO.wPlus/2;
   svg += elbow(atI.bx+boxW(atI.t), mA, aP-11, mA, "");
