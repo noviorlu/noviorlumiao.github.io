@@ -220,7 +220,9 @@
       <option value="gqa">GQA — 若干头共享一组 K/V</option>
       <option value="mqa">MQA — 所有头共享一组 K/V</option>
     </select></div>
-    <div class="field" id="fNkv"><label>n_kv_heads <small>K/V 的组数</small></label><input id="nkv" type="number" value="25"></div>
+    <div class="field"><label>n_kv_heads <small>K/V 的头数，1…h</small></label><input id="nkv" type="number" value="25" min="1"></div>
+    <div class="field"><label>d_k <small>每个头多宽</small></label><input id="dk" type="number" value="64" min="1"></div>
+    <label class="chk"><input type="checkbox" id="autodk" checked> d_k 自动取 d/h</label>
     <div class="derived" id="attnDer"></div>
 
     <h2 style="margin-top:22px">前馈网络</h2>
@@ -417,22 +419,28 @@ AI &gt; 平衡点 → compute-bound（算力吃满）    AI &lt; 平衡点 → m
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const IN = ["V","T","L","d","h","nkv","dff","B","bpe","vram","peak","bw","mfu","steps","tB"];
+const IN = ["V","T","L","d","h","nkv","dk","dff","B","bpe","vram","peak","bw","mfu","steps","tB"];
 const SEL = ["attn","ffn"];
 
 // 预设：形状 + 变体。参数量已对着公开数字核过，见第 1 段末尾那行自检。
 const PRESETS = {
-  "GPT-2 small":  {V:50257,T:1024,L:12,d:768, h:12, dff:2048, attn:"mha",ffn:"swiglu",nkv:12},
-  "GPT-2 medium": {V:50257,T:1024,L:24,d:1024,h:16, dff:2752, attn:"mha",ffn:"swiglu",nkv:16},
-  "GPT-2 large":  {V:50257,T:1024,L:36,d:1280,h:20, dff:3392, attn:"mha",ffn:"swiglu",nkv:20},
-  "GPT-2 XL":     {V:50257,T:1024,L:48,d:1600,h:25, dff:4288, attn:"mha",ffn:"swiglu",nkv:25},
-  "GPT-2 XL·原版MLP":{V:50257,T:1024,L:48,d:1600,h:25,dff:6400,attn:"mha",ffn:"mlp",nkv:25},
-  "作业默认":      {V:10000,T:256, L:4, d:512, h:16, dff:1344, attn:"mha",ffn:"swiglu",nkv:16},
-  "Llama-3-8B":   {V:128256,T:8192,L:32,d:4096,h:32, dff:14336,attn:"gqa",ffn:"swiglu",nkv:8},
-  "Llama-3-70B":  {V:128256,T:8192,L:80,d:8192,h:64, dff:28672,attn:"gqa",ffn:"swiglu",nkv:8},
+  "GPT-2 small":  {V:50257,T:1024,L:12,d:768, h:12, dff:2048, attn:"mha",ffn:"swiglu",nkv:12, dk:64},
+  "GPT-2 medium": {V:50257,T:1024,L:24,d:1024,h:16, dff:2752, attn:"mha",ffn:"swiglu",nkv:16, dk:64},
+  "GPT-2 large":  {V:50257,T:1024,L:36,d:1280,h:20, dff:3392, attn:"mha",ffn:"swiglu",nkv:20, dk:64},
+  "GPT-2 XL":     {V:50257,T:1024,L:48,d:1600,h:25, dff:4288, attn:"mha",ffn:"swiglu",nkv:25, dk:64},
+  "GPT-2 XL·原版MLP":{V:50257,T:1024,L:48,d:1600,h:25,dff:6400,attn:"mha",ffn:"mlp",nkv:25, dk:64},
+  "作业默认":      {V:10000,T:256, L:4, d:512, h:16, dff:1344, attn:"mha",ffn:"swiglu",nkv:16, dk:32},
+  "Llama-3-8B":   {V:128256,T:8192,L:32,d:4096,h:32, dff:14336,attn:"gqa",ffn:"swiglu",nkv:8, dk:128},
+  "Llama-3-70B":  {V:128256,T:8192,L:80,d:8192,h:64, dff:28672,attn:"gqa",ffn:"swiglu",nkv:8, dk:128},
+  "Gemma-2-9B":   {V:256000,T:8192,L:42,d:3584,h:16, dff:14336,attn:"gqa",ffn:"geglu", nkv:8, dk:256},
 };
 // 公开参数量，用来自检公式（都是 no-weight-tying 口径；GPT-2 那栏是 tying 后的官方数）
-const KNOWN = {"Llama-3-8B":8.030e9, "Llama-3-70B":70.55e9};
+// tied = 官方数字里 embedding 和 lm_head 共享一份权重，本页按不共享算，比对时要减掉一份 V·d
+const KNOWN = {
+  "Llama-3-8B":  {P:8.030e9},
+  "Llama-3-70B": {P:70.554e9},
+  "Gemma-2-9B":  {P:9.24e9, tied:1},
+};
 
 const FFN = {
   swiglu:{n:3, act:"SiLU",  gated:true,  label:"SwiGLU"},
@@ -498,24 +506,25 @@ function stack(barEl, legEl, items){
 function compute(p){
   const {V,T,L,d,h,B,bpe,dff} = p;
   const ff = FFN[p.ffn];
-  const nkv = p.attn === "mha" ? h : (p.attn === "mqa" ? 1 : Math.max(1, Math.min(h, p.nkv)));
-  const dk  = d/h;
-  const dkv = nkv*dk;             // K/V 投影的输出宽度；MHA 下 = d
+  const nkv = Math.max(1, Math.min(h, Math.round(p.nkv)));   // K/V 的头数，自由参数
+  const dk  = Math.max(1, p.dk);   // 每个头多宽。真实模型里它不一定等于 d/h
+  const dq  = h*dk;                // Q 投影的输出宽度 = 所有查询头拼起来
+  const dkv = nkv*dk;              // K/V 投影的输出宽度；MHA 下 = d_q
 
   // ── 参数量 ──
   const emb = V*d, lmh = d*V;
-  const p_q = d*d, p_k = d*dkv, p_v = d*dkv, p_o = d*d;
-  const attn  = p_q + p_k + p_v + p_o;        // MHA: 4d²
+  const p_q = d*dq, p_k = d*dkv, p_v = d*dkv, p_o = dq*d;
+  const attn  = p_q + p_k + p_v + p_o;        // MHA 且 d_q=d 时就是 4d²
   const ffnP  = ff.n * d * dff;               // 门控 3，不门控 2
   const norms = 2*d;
   const P = emb + L*(attn + ffnP + norms) + d + lmh;
 
   // ── 一次 forward 的 FLOPs（不含 B）──
-  const f_q  = 2*T*d*d;          // x @ Wq
+  const f_q  = 2*T*d*dq;         // x @ Wq
   const f_kv = 2*T*d*dkv;        // x @ Wk 或 x @ Wv
-  const f_o  = 2*T*d*d;          // @ Wo
-  const f_score = 2*T*T*d;       // Q@K^T：K 复制回 h 份，所以是 h·d_k = d
-  const f_ctx   = 2*T*T*d;       // scores@V，同上
+  const f_o  = 2*T*dq*d;         // @ Wo
+  const f_score = 2*T*T*dq;      // Q@K^T：K 复制回 h 份，所以是 h·d_k = d_q
+  const f_ctx   = 2*T*T*dq;      // scores@V，同上
   const f_ff1   = 2*T*d*dff;     // 每个 FFN 矩阵
   const perLayer = f_q + 2*f_kv + f_o + f_score + f_ctx + ff.n*f_ff1;
   const f_lm = 2*T*d*V;
@@ -523,15 +532,17 @@ function compute(p){
 
   const blocks = [
     {k:"FFN",           sym:`2·T·(${ff.n}·d·d_ff)·L`,   v:L*ff.n*f_ff1},
-    {k:"Attention 投影", sym:"2·T·(2d² + 2d·n_kv·d_k)·L", v:L*(f_q+2*f_kv+f_o)},
-    {k:"Attention 打分", sym:"4·L·T²·d",                 v:L*(f_score+f_ctx)},
+    {k:"Attention 投影", sym:"2·T·(2·d·d_q + 2·d·d_kv)·L", v:L*(f_q+2*f_kv+f_o)},
+    {k:"Attention 打分", sym:"4·L·T²·d_q",                v:L*(f_score+f_ctx)},
     {k:"lm_head",       sym:"2·T·d·V",                  v:f_lm},
   ];
 
   // ── 激活值 ──
   // 残差流宽度的那些：2 个 norm + Q + ctx + o + block 输入 = 6·B·T·d
-  // K、V 只有 n_kv 组，单独算：2·B·T·n_kv·d_k。MHA 下两项合起来正好回到 8·B·T·d
-  const a_stream = 6*B*T*d + 2*B*T*dkv;
+  // d_q = h·d_k（Q 与 ctx），d_kv = n_kv·d_k（K 与 V）
+  // 残差流宽度的四份（两个 norm、块入口、Wo 输出）+ Q 与 ctx（各 d_q）+ K 与 V（各 d_kv）
+  // MHA 且 d_q = d_kv = d 时合起来正好是 8·B·T·d
+  const a_stream = 4*B*T*d + 2*B*T*dq + 2*B*T*dkv;
   const a_score  = 2*B*h*T*T;                 // 打分 + softmax，和 n_kv 无关
   const a_ff     = (ff.gated?4:2)*B*T*dff;
   const A = L*(a_stream + a_score + a_ff) + B*T*d + 2*B*T*V;
@@ -541,18 +552,18 @@ function compute(p){
   // ── arithmetic intensity：AI = FLOPs / 搬运字节，随 dtype 变 ──
   const mk = (k, sym, f, elems) => ({k, sym, f, b:bpe*elems, v:f/(bpe*elems)});
   const ai = [
-    mk("投影 x@Wq",  "2·T·d / (2T+d)",                  f_q,     2*T*d + d*d),
+    mk("投影 x@Wq",  "2·T·d·d_q / (T·d+d·d_q+T·d_q)",    f_q,     T*d + d*dq + T*dq),
     mk("FFN x@W1",   "2·T·d·d_ff / (T·d+d·d_ff+T·d_ff)", f_ff1,   T*d + d*dff + T*dff),
-    mk("打分 Q@Kᵀ",  "2·T·d / (d+n_kv·d_k+h·T)",        f_score, T*d + T*dkv + h*T*T),
+    mk("打分 Q@Kᵀ",  "2·T·d_q / (d_q+d_kv+h·T)",         f_score, T*dq + T*dkv + h*T*T),
   ];
 
   // ── 上下文交叉点：平方项 = 线性项 ──
-  const Tstar = d + dkv + ff.n*dff/2 + V/(2*L);
+  const Tstar = d + d*dkv/dq + ff.n*d*dff/(2*dq) + V*d/(2*L*dq);
 
   return {P, emb, lmh, attn, ffnP, norms, p_q, p_k, p_v, p_o,
           F, perLayer, f_lm, f_q, f_kv, f_o, f_score, f_ctx, f_ff1,
           blocks, A, a_stream, a_score, a_ff, memFixed, memAct, kvCache,
-          ai, Tstar, nkv, dk, dkv, ff};
+          ai, Tstar, nkv, dk, dq, dkv, ff};
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -651,7 +662,7 @@ function box(x, yBase, t){
 }
 
 function drawArch(p, r){
-  const {V,T,L,d,h,B,dff} = p, {nkv, dk, dkv, ff} = r;
+  const {V,T,L,d,h,B,dff} = p, {nkv, dk, dq, dkv, ff} = r;
   const A = GEO.A, M = GEO.M;
   const sym = a => "[" + a.map(q=>q[0]).join(", ") + "]";
   const num = a => "[" + a.map(q=>N(q[1])).join(", ") + "]";
@@ -675,10 +686,10 @@ function drawArch(p, r){
                     {cols:dk, heads:n, cols_l:`d_k=${N(dk)}`, catW:n*dk, catL:N(n*dk)});
   const Tsc   = Tn("scores", [["batch",B],["h",h],["T",T],["T",T]], {cols:T, heads:h, cls:"hot", cols_l:`T=${N(T)}`});
   const Tctx  = Tn("ctx", [["batch",B],["h",h],["T",T],["d_k",dk]],
-                    {cols:dk, heads:h, cls:"hot", cols_l:`d_k=${N(dk)}`, catW:h*dk, catL:N(d)});
+                    {cols:dk, heads:h, cls:"hot", cols_l:`d_k=${N(dk)}`, catW:dq, catL:N(dq)});
   // 拼头之后：h 片沿特征维接成一条，宽度正好回到 d。段的颜色和 ctx 的切片一一对应。
-  const Tcat  = Tn("拼接后", [["batch",B],["T",T],["h·d_k",h*dk]],
-                    {cols:h*dk, cls:"hot", segs:nSlab(h), cols_l:`${N(h)}×${N(dk)}=${N(d)}`});
+  const Tcat  = Tn("拼接后", [["batch",B],["T",T],["d_q",dq]],
+                    {cols:dq, cls:"hot", segs:nSlab(h), cols_l:`${N(h)}×${N(dk)}=${N(dq)}`});
   const Tff   = nm => Tn(nm, [["batch",B],["T",T],["d_ff",dff]], {cols:dff, cols_l:`d_ff=${N(dff)}`});
   const Tlog  = Tn("logits", [["batch",B],["T",T],["V",V]], {cols:V, cols_l:`V=${N(V)}${cut(V)?" ⌇":""}`});
   const Tids  = Tn("token ids", [["batch",B],["T",T]], {cols:1, rows_l:`T=${N(T)}`});
@@ -689,14 +700,14 @@ function drawArch(p, r){
     [[1, Tx(1)]],
     [[1, Wg("g₁")]],
     [[1, Tstm("ln1")]],
-    [[0, Wn("W_q","q_proj",[["d_model",d],["h·d_k",h*dk]])],
-     [1, Wn("W_k","k_proj",[["d_model",d],["n_kv·d_k",nkv*dk]])],
-     [2, Wn("W_v","v_proj",[["d_model",d],["n_kv·d_k",nkv*dk]])]],
+    [[0, Wn("W_q","q_proj",[["d_model",d],["d_q",dq]])],
+     [1, Wn("W_k","k_proj",[["d_model",d],["d_kv",dkv]])],
+     [2, Wn("W_v","v_proj",[["d_model",d],["d_kv",dkv]])]],
     [[0, Thd("Q",h,0)], [1, Thd("K",nkv,1)], [2, Thd("V",nkv,1)]],
     [[1, Tsc]],
     [[1, Tctx]],
     [[1, Tcat]],
-    [[1, Wn("W_o","o_proj",[["h·d_k",h*dk],["d_model",d]])]],
+    [[1, Wn("W_o","o_proj",[["d_q",dq],["d_model",d]])]],
     [[1, Tstm("attn 输出")]],
   ];
   const gated = ff.gated;
@@ -830,7 +841,7 @@ function drawArch(p, r){
   y = G.bottom + 10;
   svg += `<rect class="grpbox" x="${M-44}" y="${gTop}" width="${W-2*(M-44)}" height="${y-gTop}" rx="8"/>`
        + `<text class="grp" x="${M-32}" y="${gTop+20}">自注意力 · ${ATTN[p.attn]}`
-       + `　h=${N(h)}，n_kv=${N(nkv)}，d_k=${N(dk)}　斜纹 = 权重</text>`;
+       + `　h=${N(h)}，n_kv=${N(nkv)}，d_k=${N(dk)}　→ d_q=${N(dq)}，d_kv=${N(dkv)}　斜纹 = 权重</text>`;
   y += 46;
 
   // ── 前馈 ──
@@ -1021,11 +1032,14 @@ function render(){
   SEL.forEach(k => p[k] = $(k).value);
   const ffm = FFN[p.ffn];
   if($("autoff").checked){ p.dff = Math.round((ffm.gated?8/3:4)*p.d/64)*64; $("dff").value = p.dff; }
-  $("fNkv").classList.toggle("off", p.attn !== "gqa");
+  if($("autodk").checked){ p.dk = Math.max(1, Math.round(p.d/Math.max(1,p.h))); $("dk").value = p.dk; }
   const {V,T,L,d,h,dff,B,bpe} = p;
   const r = compute(p);
-  const {nkv, dk, dkv, ff} = r;
-  if(p.attn !== "gqa") $("nkv").value = N(nkv);
+  const {nkv, dk, dq, dkv, ff} = r;
+  // 变体不是下拉框说了算，而是 n_kv 自己决定的：等于 h 就是 MHA，等于 1 就是 MQA
+  p.attn = nkv === h ? "mha" : nkv === 1 ? "mqa" : "gqa";
+  if($("attn").value !== p.attn) $("attn").value = p.attn;
+  if(+$("nkv").value !== nkv) $("nkv").value = N(nkv);
 
   const S = (...a)=>"["+a.join(", ")+"]";
   const xd = S(N(B), N(T), N(d));
@@ -1033,8 +1047,12 @@ function render(){
   $("archLine").textContent = `当前架构：pre-norm、RMSNorm、RoPE、无 weight tying、无 bias`
     + ` ｜ 注意力 ${ATTN[p.attn]}（h=${N(h)}, n_kv=${N(nkv)}, d_k=${N(dk)}）`
     + ` ｜ 前馈 ${ff.label}（${ff.n} 矩阵, ${ff.act}）`;
-  $("attnDer").innerHTML = `d_k = d/h = ${N(dk)}　K/V 投影宽度 n_kv·d_k = <b>${N(dkv)}</b>`
-    + `（MHA 时 = d = ${N(d)}）<br>KV cache 比 MHA 省 <b>${fmt(d/dkv,2)}×</b>`;
+  $("attnDer").innerHTML =
+      `d_q = h·d_k = ${N(h)}×${N(dk)} = <b>${N(dq)}</b>${dq!==d?`　<span class="tag bad">≠ d=${N(d)}</span>`:"　= d"}<br>`
+    + `d_kv = n_kv·d_k = ${N(nkv)}×${N(dk)} = <b>${N(dkv)}</b>　`
+    + `KV cache 是 MHA 的 <b>1/${fmt(dq/dkv,2)}</b><br>`
+    + (h % nkv ? `<span class="tag bad">h=${N(h)} 不能被 n_kv=${N(nkv)} 整除</span>——分组分不匀，真实模型不会这么配`
+              : `每 ${N(h/nkv)} 个查询头共享一组 K/V`)
   $("ffnDer").innerHTML = `${ff.n} 个 d×d_ff 矩阵 → 每层 ${ff.n}·d·d_ff = <b>${cnt(r.ffnP)}</b> 参数<br>`
     + `门控 8/3·d 与不门控 4·d 的 FLOPs 相同：3·(8/3) = 2·4 = 8`;
 
@@ -1105,16 +1123,19 @@ function render(){
 
   // ── 一、参数量 ──
   $("eqParams").innerHTML =
-`P = <b>2·V·d</b> + L·(<b>2·d² + 2·d·n_kv·d_k</b> + <b>${ff.n}·d·d_ff</b> + <b>2·d</b>) + <b>d</b>
-      注意力：Wq、Wo 各 d²，Wk、Wv 各 d·n_kv·d_k  ${p.attn==="mha"?"（MHA 下 n_kv·d_k = d，合起来 4d²）":`（${ATTN[p.attn]}：n_kv·d_k = ${N(dkv)}，只有 d 的 ${fmt(dkv/d,3)}）`}
+`P = <b>2·V·d</b> + L·(<b>2·d·d_q + 2·d·d_kv</b> + <b>${ff.n}·d·d_ff</b> + <b>2·d</b>) + <b>d</b>
+      d_q = h·d_k = ${N(dq)}     所有查询头拼起来的宽度（Wq 的出口、Wo 的入口）
+      d_kv = n_kv·d_k = ${N(dkv)}     所有 K/V 头拼起来的宽度（Wk、Wv 的出口）
+      ${dq===dkv&&dq===d ? "此处 d_q = d_kv = d，注意力那几项合起来就是 4d²"
+        : `此处 d_kv 只有 d_q 的 ${fmt(dkv/dq,3)}${dq!==d?`，而 d_q 也不等于 d`:""}`}
       前馈：  ${ff.label} ${ff.n} 个 d×d_ff 矩阵`;
   tbl($("tParams"),
     ["组件","符号","参数量","显存","占比"],
     [
       ["token_embeddings","V·d",           int(r.emb),        bytes(bpe*r.emb),        pct(r.emb/r.P)],
-      ["q_proj","d² × L",                  int(L*r.p_q),      bytes(bpe*L*r.p_q),      pct(L*r.p_q/r.P)],
-      ["k_proj + v_proj","2·d·n_kv·d_k × L",int(L*(r.p_k+r.p_v)),bytes(bpe*L*(r.p_k+r.p_v)),pct(L*(r.p_k+r.p_v)/r.P)],
-      ["output_proj","d² × L",             int(L*r.p_o),      bytes(bpe*L*r.p_o),      pct(L*r.p_o/r.P)],
+      ["q_proj","d·d_q × L",                  int(L*r.p_q),      bytes(bpe*L*r.p_q),      pct(L*r.p_q/r.P)],
+      ["k_proj + v_proj","2·d·d_kv × L",int(L*(r.p_k+r.p_v)),bytes(bpe*L*(r.p_k+r.p_v)),pct(L*(r.p_k+r.p_v)/r.P)],
+      ["output_proj","d_q·d × L",             int(L*r.p_o),      bytes(bpe*L*r.p_o),      pct(L*r.p_o/r.P)],
       [`${ff.label} 的 ${ff.n} 个矩阵`,`${ff.n}·d·d_ff × L`, int(L*r.ffnP), bytes(bpe*L*r.ffnP), pct(L*r.ffnP/r.P)],
       ["ln1/ln2","2·d × L",                int(L*r.norms),    bytes(bpe*L*r.norms),    pct(L*r.norms/r.P)],
       ["ln_final","d",                     int(d),            bytes(bpe*d),            pct(d/r.P)],
@@ -1124,24 +1145,24 @@ function render(){
 
   // ── 二、FLOPs ──
   const fRows = [
-    ["MHA · x@Wq","2·T·d²",              r.f_q],
-    ["MHA · x@Wk","2·T·d·n_kv·d_k",      r.f_kv],
-    ["MHA · x@Wv","2·T·d·n_kv·d_k",      r.f_kv],
-    ["MHA · Q@Kᵀ","2·T²·d",              r.f_score],
-    ["MHA · scores@V","2·T²·d",          r.f_ctx],
-    ["MHA · @Wo","2·T·d²",               r.f_o],
+    ["MHA · x@Wq","2·T·d·d_q",           r.f_q],
+    ["MHA · x@Wk","2·T·d·d_kv",          r.f_kv],
+    ["MHA · x@Wv","2·T·d·d_kv",          r.f_kv],
+    ["MHA · Q@Kᵀ","2·T²·d_q",            r.f_score],
+    ["MHA · scores@V","2·T²·d_q",        r.f_ctx],
+    ["MHA · @Wo","2·T·d_q·d",            r.f_o],
   ].concat(ff.gated
     ? [["FFN · x@W1","2·T·d·d_ff",r.f_ff1],["FFN · x@W3","2·T·d·d_ff",r.f_ff1],["FFN · @W2","2·T·d·d_ff",r.f_ff1]]
     : [["FFN · x@W_in","2·T·d·d_ff",r.f_ff1],["FFN · @W_out","2·T·d·d_ff",r.f_ff1]]
   ).map(x=>[x[0],x[1],flops(x[2]),pct(x[2]*L/r.F)]);
-  fRows.push(["每层小计", `2T(2d²+2d·n_kv·d_k) + 4T²d + ${ff.n}·2T·d·d_ff`, flops(r.perLayer), pct(L*r.perLayer/r.F)]);
+  fRows.push(["每层小计", `2T(2·d·d_q+2·d·d_kv) + 4T²·d_q + ${ff.n}·2T·d·d_ff`, flops(r.perLayer), pct(L*r.perLayer/r.F)]);
   fRows.push(["出口 · x@lm_head","2·T·d·V", flops(r.f_lm), pct(r.f_lm/r.F)]);
   fRows.push(["token_embeddings","查表 gather", "0", "0%"]);
   tbl($("tFlops"), ["在哪","符号 FLOPs","单次","×L 后占总量"], fRows,
       ["一次 forward 总计","L·每层 + 2·T·d·V", flops(r.F), "100%"]);
   $("eqFlops").innerHTML =
-`每层 = <b>4·T·d²</b> + <b>4·T·d·n_kv·d_k</b> + <b>4·T²·d</b> + <b>${ff.n*2}·T·d·d_ff</b>
-${p.attn==="mha" ? "  MHA 下前两项合并 = 8·T·d²" : `  ${ATTN[p.attn]} 下第二项只有 MHA 的 ${fmt(dkv/d,3)}`}
+`每层 = <b>4·T·d·d_q</b> + <b>4·T·d·d_kv</b> + <b>4·T²·d_q</b> + <b>${ff.n*2}·T·d·d_ff</b>
+${dq===dkv ? "  d_q = d_kv，前两项可以合并" : `  d_kv 只有 d_q 的 ${fmt(dkv/dq,3)}，第二项按比例缩小`}
 总计 = L·每层 + <b>2·T·d·V</b>（lm_head）`;
 
   // ── 三、四大块 ──
@@ -1152,7 +1173,7 @@ ${p.attn==="mha" ? "  MHA 下前两项合并 = 8·T·d²" : `  ${ATTN[p.attn]} �
   const sc  = r.blocks[2];
   $("blockNote").innerHTML = `当前配置下最贵的是 <b>${big.k}（${pct(big.v/r.F)}）</b>，`+
     `而"真正的注意力计算"（激活×激活的那两次）只占 <b>${pct(sc.v/r.F)}</b>。`+
-    `打分与投影的比值是 <code>T/(d+n_kv·d_k) = ${fmt(T/(d+dkv),3)}</code>——<b>层数完全约掉了</b>。`;
+    `打分与投影的比值是 <code>T·d_q / (d·(d_q+d_kv)) = ${fmt(T*dq/(d*(dq+dkv)),3)}</code>——<b>层数完全约掉了</b>。`;
 
   // ── 四、训练一步 ──
   const stepF = 3*r.F, optF = 14*r.P;
@@ -1167,13 +1188,13 @@ ${p.attn==="mha" ? "  MHA 下前两项合并 = 8·T·d²" : `  ${ATTN[p.attn]} �
   $("eqMem").innerHTML =
 `固定部分 = <b>4P</b>     参数(P) + 梯度(P) + AdamW 的 m、v(2P)
 
-每层激活 = <b>6·B·T·d</b> + <b>2·B·T·n_kv·d_k</b> + <b>2·B·h·T²</b> + <b>${ff.gated?4:2}·B·T·d_ff</b>
-           两个norm+Q+ctx+o+入口   K 和 V         QKᵀ 和 softmax   ${ff.label} 的中间量
-           ${p.attn==="mha"?"（MHA 下前两项合并 = 8·B·T·d）":`（${ATTN[p.attn]}：K/V 那项只有 MHA 的 ${fmt(dkv/d,3)}）`}
+每层激活 = <b>4·B·T·d</b> + <b>2·B·T·d_q</b> + <b>2·B·T·d_kv</b> + <b>2·B·h·T²</b> + <b>${ff.gated?4:2}·B·T·d_ff</b>
+           两norm+入口+Wo出口   Q 和 ctx      K 和 V         QKᵀ 和 softmax   ${ff.label} 的中间量
+           ${dq===dkv&&dq===d?"（此处 d_q = d_kv = d，前三项合并 = 8·B·T·d）":`（d_kv 只有 d_q 的 ${fmt(dkv/dq,3)}）`}
 
 A = L·(每层) + <b>B·T·d</b> + <b>2·B·T·V</b>      出口的 norm、logits、cross-entropy
 <b>Mem = bytes · (4P + A)</b>
-KV cache（推理，不是训练）= bytes · <b>2·L·B·T·n_kv·d_k</b>`;
+KV cache（推理，不是训练）= bytes · <b>2·L·B·T·d_kv</b>`;
   const total = r.memFixed + r.memAct;
   const vramB = p.vram*1e9;
   const maxB = Math.floor((vramB - r.memFixed) / (r.memAct/Math.max(B,1)));
@@ -1182,13 +1203,13 @@ KV cache（推理，不是训练）= bytes · <b>2·L·B·T·n_kv·d_k</b>`;
     [`激活值（B=${int(B)}）`,"bytes·A", bytes(r.memAct)],
     ["合计","bytes·(4P+A)", bytes(total)],
     [`${int(p.vram)} GB 能放的 batch`, maxB>0?"⌊(显存−4P)/每样本⌋":"装不下", maxB>0?int(maxB):"0"],
-    ["KV cache","2·L·B·T·n_kv·d_k", bytes(r.kvCache)],
+    ["KV cache","2·L·B·T·d_kv", bytes(r.kvCache)],
   ].map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v">${k[2]}</div><div class="s">${k[1]}</div></div>`).join("");
 
   const acts = [
     {k:"2·h·T²  打分+softmax", v:L*r.a_score},
     {k:`${ff.gated?4:2}·T·d_ff  ${ff.label}`, v:L*r.a_ff},
-    {k:"6·T·d + 2·T·n_kv·d_k  流/K/V", v:L*r.a_stream},
+    {k:"4·T·d + 2·T·d_q + 2·T·d_kv  流/Q/K/V", v:L*r.a_stream},
     {k:"出口 logits 等",        v:B*T*d + 2*B*T*V},
   ];
   stack($("barAct"), $("legAct"), acts);
@@ -1196,7 +1217,7 @@ KV cache（推理，不是训练）= bytes · <b>2·L·B·T·n_kv·d_k</b>`;
     [
       ["打分矩阵 + softmax","2·B·h·T² × L",           int(L*r.a_score), pct(L*r.a_score/r.A)],
       [`${ff.label} 中间量`,`${ff.gated?4:2}·B·T·d_ff × L`, int(L*r.a_ff), pct(L*r.a_ff/r.A)],
-      ["残差流侧 + K/V","(6·B·T·d + 2·B·T·n_kv·d_k) × L", int(L*r.a_stream), pct(L*r.a_stream/r.A)],
+      ["残差流侧 + Q/K/V","(4·B·T·d + 2·B·T·d_q + 2·B·T·d_kv) × L", int(L*r.a_stream), pct(L*r.a_stream/r.A)],
       ["出口 norm/logits/CE","B·T·d + 2·B·T·V",       int(B*T*d+2*B*T*V), pct((B*T*d+2*B*T*V)/r.A)],
     ],
     ["合计 A","", int(r.A), "100%"]);
@@ -1206,7 +1227,7 @@ KV cache（推理，不是训练）= bytes · <b>2·L·B·T·n_kv·d_k</b>`;
     (perSample>bpe*r.P?"<b>激活比全部权重还多</b>。":"")+
     ` 其中打分矩阵一项占 <b>${pct(L*r.a_score/r.A)}</b>，而它在 FLOPs 上只占 ${pct(r.blocks[2].v/r.F)}。`+
     ` <b>算力上是配角，显存上是主角</b>——这正是 FlashAttention 不物化 [h,T,T] 的理由。`;
-  const kvMHA = bpe*2*L*B*T*d;
+  const kvMHA = bpe*2*L*B*T*dq;
   $("kvNote").innerHTML =
     `<b>KV cache 是推理时的账，训练时没有</b>——训练一次算完整个序列，不需要缓存历史 K/V。`
     + ` 当前 ${ATTN[p.attn]} 下是 <b>${bytes(r.kvCache)}</b>`
@@ -1245,11 +1266,11 @@ KV cache（推理，不是训练）= bytes · <b>2·L·B·T·n_kv·d_k</b>`;
 
   // ── 八、上下文缩放 ──
   $("eqTstar").innerHTML =
-`交叉点（线性项 = 平方项）：<b>T* = d + n_kv·d_k + ${ff.n}/2·d_ff + V/(2L)</b>
-${p.attn==="mha"&&ff.gated&&Math.abs(dff-8/3*d)<64 ? "  MHA + 门控 8/3·d 时化简为 T* ≈ 6·d + V/(2L)" : ""}`;
+`交叉点（线性项 = 平方项）：<b>T* = d + d·d_kv/d_q + ${ff.n}/2·d·d_ff/d_q + V·d/(2L·d_q)</b>
+${p.attn==="mha"&&dq===d&&ff.gated&&Math.abs(dff-8/3*d)<64 ? "  MHA + d_q=d + 门控 8/3·d 时化简为 T* ≈ 6·d + V/(2L)" : ""}`;
   const scaleRows = [0.5,1,2,4,8,16].map(m=>{
     const t = Math.round(T*m);
-    const lin = L*(2*2*t*d*d + 2*2*t*d*dkv + ff.n*2*t*d*dff) + 2*t*d*V, quad = L*4*t*t*d;
+    const lin = L*(2*2*t*d*dq + 2*2*t*d*dkv + ff.n*2*t*d*dff) + 2*t*d*V, quad = L*4*t*t*dq;
     return [ (m===1?`T = ${int(t)}（当前）`:`T = ${int(t)}`), `×${m}`,
              flops(lin+quad), pct(quad/(lin+quad)),
              fmt((lin+quad)/r.F,2)+"×" ];
@@ -1260,15 +1281,20 @@ ${p.attn==="mha"&&ff.gated&&Math.abs(dff-8/3*d)<64 ? "  MHA + 门控 8/3·d 时�
     ` 当前 T=${int(T)} ${T<r.Tstar?"<b>还在线性区</b>":"<b>已经进入平方区</b>"}。`;
 
   // ── 参数量自检 ──
-  const hit = Object.entries(KNOWN).find(([k,v])=>{
+  const hit = Object.entries(KNOWN).find(([k])=>{
     const q = PRESETS[k];
-    return q.V===V && q.L===L && q.d===d && q.h===h && q.dff===dff && q.nkv===nkv && q.ffn===p.ffn && q.attn===p.attn;
+    return q.V===V && q.L===L && q.d===d && q.h===h && q.dff===dff && q.nkv===nkv && q.dk===dk && q.ffn===p.ffn;
   });
-  $("paramCheck").innerHTML = hit
-    ? `<span class="tag ok">自检</span> 当前形状是 <b>${hit[0]}</b>，公式算出 <b>${cnt(r.P)}</b>，`
-      + `公开参数量 <b>${cnt(hit[1])}</b>，差 ${pct(Math.abs(r.P-hit[1])/hit[1])}。`
-      + `（这条只在形状完全对上时出现，是用来验证 GQA 那几项没写错的。）`
-    : `<span class="tag ok">提示</span> 切到 <b>Llama-3-8B</b> 或 <b>Llama-3-70B</b> 预设，这里会拿公式的结果和公开参数量对一下，验证 GQA 的项没写错。`;
+  if(hit){
+    const mine = hit[1].tied ? r.P - V*d : r.P;      // 官方数字共享 embedding 时要减掉一份
+    $("paramCheck").innerHTML = `<span class="tag ok">自检</span> 当前形状是 <b>${hit[0]}</b>，`
+      + `公式算出 <b>${cnt(mine)}</b>${hit[1].tied?`（本页按不共享 embedding 算是 ${cnt(r.P)}，这里减掉一份 V·d 才和官方口径一致）`:""}，`
+      + `公开参数量 <b>${cnt(hit[1].P)}</b>，差 ${pct(Math.abs(mine-hit[1].P)/hit[1].P)}。`;
+  } else {
+    $("paramCheck").innerHTML = `<span class="tag ok">提示</span> 切到 <b>Llama-3-8B</b>、<b>Llama-3-70B</b> `
+      + `或 <b>Gemma-2-9B</b> 预设，这里会拿公式的结果和公开参数量对一下。`
+      + `Gemma-2 的 d_q = h·d_k = 4096 并<b>不等于</b> d = 3584，正好用来验证 d_k 独立之后的公式。`;
+  }
 
   // ── 卡片收起时的一行结论 ──
   hd(0, `${N(L)}×${ATTN[p.attn]}+${ff.label} · 残差流 ${xd}`);
@@ -1288,12 +1314,21 @@ $("presets").addEventListener("click", e=>{
   const k = e.target.dataset.p; if(!k) return;
   const P = PRESETS[k];
   Object.keys(P).forEach(f=>$(f).value = P[f]);
-  $("autoff").checked = false;
+  $("autoff").checked = false; $("autodk").checked = false;
   render();
 });
 IN.forEach(k=>$(k).addEventListener("input", render));
-SEL.forEach(k=>$(k).addEventListener("change", render));
+$("ffn").addEventListener("change", render);
+// 注意力的下拉框只是改 n_kv 的快捷方式：真正决定变体的是 n_kv 本身
+$("attn").addEventListener("change", e=>{
+  const h = Math.max(1, +$("h").value || 1);
+  $("nkv").value = e.target.value === "mha" ? h
+                 : e.target.value === "mqa" ? 1
+                 : Math.max(1, Math.round(h/4));
+  render();
+});
 $("autoff").addEventListener("change", render);
+$("autodk").addEventListener("change", render);
 
 setupCanvas();
 const CARDS = [...document.querySelectorAll("details.card")];
