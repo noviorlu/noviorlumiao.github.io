@@ -256,7 +256,7 @@
         Q / K / V / ctx 的宽度是<b>拼接后的真实宽度</b> n×d_k，里面的竖线就是头的分界——
         所以 Q 拼起来正好和残差流一样宽（h·d_k = d），而 GQA 下 K、V 明显更窄。
         scores 是每个头一张 T×T，画成深度方向的分层。<br>
-        绿色那条粗线是<b>残差捷径</b>：它从子层入口<b>绕过整个子层</b>直接落到 ⊕。注意它取的是
+        绿色的线就是<b>残差流本身</b>：它从上一段的 ⊕ 一路接到下一个子层的入口，中途还分出一条<b>捷径</b><b>绕过整个子层</b>直接落到 ⊕。注意捷径取的是
         <b>进 RMSNorm 之前的原始 x</b>——归一化只作用在子层内部这一支上，残差通路始终是干净的，
         这就是 pre-norm。门控 FFN 那排 <code>d_ff</code> 宽的盒子<b>正好 4 个</b>
         （门 g、值 v、激活后的 g、两者相乘），对应第 5 段显存公式里的 <code>4·B·T·d_ff</code>。
@@ -644,10 +644,15 @@ function drawArch(p, r){
           + `<rect width="6" height="6" fill="var(--code)"/>`
           + `<line x1="0" y1="0" x2="0" y2="6" stroke="var(--muted)" stroke-width="1.4" opacity=".45"/></pattern></defs>`;
   let y = 0;
-  const band = txt => {
-    const s = `<rect class="band" x="20" y="${y}" width="${W-40}" height="18" rx="4"/>`
-            + `<text class="grp" x="${W/2}" y="${y+13}" text-anchor="middle">${txt}</text>`;
-    y += 18 + 14; return s;
+  // 残差流的续接：从上一段的出口（⊕ 或盒子底）绕回下一段入口那个 x 盒的顶边
+  let link = null;                       // {x, y} 上一段的出口
+  const loop = (toX, toTop, ym, label) => {
+    if(!link) return "";
+    // 箭头尖要正好落在 x 盒的顶边上，不能悬在上面留一道缝
+    let s = `<path class="resline" d="M ${link.x} ${link.y} V ${ym} H ${toX} V ${toTop-8}"/>`
+          + `<path d="M ${toX} ${toTop} l -5 -9 l 10 0 z" fill="var(--accent)"/>`;
+    if(label) s += `<text class="reslbl" x="${(link.x+toX)/2}" y="${ym-6}" text-anchor="middle">${label}</text>`;
+    return s;
   };
   const elbow = (x1,y1,x2,y2,label,xm) => {
     const mx = xm !== undefined ? xm : (x1+x2)/2;
@@ -677,14 +682,15 @@ function drawArch(p, r){
   svg += box(x, yb, Wm("W_emb", V, d, `V=${N(V)}`, `d=${N(d)}`));
   x += px(d); svg += elbow(x, yb-hBox/2, x+A, yb-hBox/2, ""); x += A;
   svg += box(x, yb, {...Tstream("x","res",0), shape:S(B,T,d)});
-  y = yb + GEO.labDn;
-  svg += band(`残差流 x  ${S(B,T,d)}  ——  往下每个子层只往它身上「加」，宽度恒为 d=${N(d)}`);
+  link = {x: x + px(d)/2, y: yb};
+  y = yb + GEO.labDn + 46;
 
   // ── 自注意力 ──
   let gTop = y; y += GEO.padTop;
   const aTop = y, yAt = f => aTop + f*rowH + GEO.labUp + hBox, mAt = f => yAt(f) - hBox/2;
   const midA = mAt(1);
   x = M;
+  svg += loop(M + px(d)/2, yAt(1)-hBox, gTop - 24, `残差流 x ${S(B,T,d)}`);
   svg += box(x, yAt(1), Tstream("x", "res", 1)); x += wS;
   svg += elbow(x, midA, x+A, midA, ""); x += A;
   svg += box(x, yAt(1)-hBox/2+px(1)/2, Wg("g₁"));   // [d] 的一条，竖直居中
@@ -721,12 +727,11 @@ function drawArch(p, r){
   svg += skip(M + px(d)/2, yAt(1)-hBox, gTop + GEO.resY, aPlus, midA, "残差捷径：原始 x，不经过 norm");
   svg += dot(aPlus, midA, "⊕", 1);
   y = yAt(2) + GEO.labDn + 10;
-  svg += `<path class="resline" d="M ${aPlus} ${midA+11} V ${y+12}"/>`;
+  link = {x: aPlus, y: midA + 11};
   svg += `<rect class="grpbox" x="${M-44}" y="${gTop}" width="${W-2*(M-44)}" height="${y-gTop}" rx="8"/>`
        + `<text class="grp" x="${M-32}" y="${gTop+20}">自注意力 · ${ATTN[p.attn]}`
        + `　h=${N(h)}，n_kv=${N(nkv)}，d_k=${N(dk)}　斜纹 = 权重</text>`;
-  y += 14;
-  svg += band(`残差流  x ← ⊕ 的输出　（加的是原始 x，不是归一化后的——这就是 pre-norm）`);
+  y += 46;
 
   // ── 前馈 ──
   gTop = y; y += GEO.padTop;
@@ -734,6 +739,7 @@ function drawArch(p, r){
   const yFt = f => fTop + f*rowH + GEO.labUp + hBox, mFt = f => yFt(f) - hBox/2;
   const midF = mFt((nR-1)/2), cRow = (nR-1)/2;
   x = M;
+  svg += loop(M + px(d)/2, yFt(cRow)-hBox, gTop - 24, `残差流 x ← ⊕ 的输出（加的是原始 x，不是归一化后的——pre-norm）`);
   svg += box(x, yFt(cRow), Tstream("x", "res", 1)); x += wS;
   svg += elbow(x, midF, x+A, midF, ""); x += A;
   svg += box(x, midF+px(1)/2, Wg("g₂"));
@@ -776,15 +782,15 @@ function drawArch(p, r){
   svg += skip(M + px(d)/2, yFt(cRow)-hBox, gTop + GEO.resY, fPlus, midF, "残差捷径：原始 x，不经过 norm");
   svg += dot(fPlus, midF, "⊕", 1);
   y = yFt(nR-1) + GEO.labDn + 10;
-  svg += `<path class="resline" d="M ${fPlus} ${midF+11} V ${y+12}"/>`;
+  link = {x: fPlus, y: midF + 11};
   svg += `<rect class="grpbox" x="${M-44}" y="${gTop}" width="${W-2*(M-44)}" height="${y-gTop}" rx="8"/>`
        + `<text class="grp" x="${M-32}" y="${gTop+20}">前馈 · ${ff.label}`
        + `　${ff.n} 个 d×d_ff 矩阵，激活 ${ff.act}${ff.gated?"，门控":"，不门控"}</text>`;
-  y += 14;
-  svg += band(`残差流  x ← ⊕ 的输出　　↻ 以上两个子层重复 L = ${N(L)} 次`);
+  y += 52;
 
   // ── 出口 ──
   yb = y + GEO.labUp + hBox; x = M;
+  svg += loop(M + px(d)/2, yb-hBox, y - 26, `↻ 以上两个子层重复 L = ${N(L)} 次，最后一层的输出走到这里`);
   svg += box(x, yb, Tstream("ln_f", "res", 1)); x += wS;
   svg += elbow(x, yb-hBox/2, x+A, yb-hBox/2, ""); x += A;
   svg += box(x, yb-hBox/2+px(d)/2, Wm("lm_head", d, V, `d=${N(d)}`, `V=${N(V)}`));
