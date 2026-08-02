@@ -159,6 +159,10 @@
   svg .flow{stroke:var(--muted); stroke-width:1.2; fill:none; opacity:.75}
   svg .grid{stroke:var(--panel); stroke-width:.6; opacity:.55}
   svg .grpbox{fill:none; stroke:var(--accent); stroke-width:1; stroke-dasharray:4 3; opacity:.65}
+  svg .layerbox{fill:none; stroke:var(--warn); stroke-width:1.6; stroke-dasharray:9 5; opacity:.75}
+  svg .layer{font:12px var(--mono); fill:var(--warn); font-weight:700}
+  svg .layerlbl{font:10.5px var(--mono); fill:var(--warn); font-weight:600}
+  svg .looparr{stroke:var(--warn); stroke-width:2; fill:none; stroke-linejoin:round; stroke-dasharray:7 4}
   svg .band{fill:var(--accent-soft); stroke:var(--accent); stroke-width:1}
   svg .resline{stroke:var(--accent); stroke-width:2.2; fill:none; stroke-linejoin:round}
   svg .reslbl{font:10.5px var(--mono); fill:var(--accent); font-weight:600}
@@ -572,7 +576,9 @@ function compute(p){
 const GEO = {
   k: 1.45, min: 10, max: 150,     // px = k·√元素数，两端夹住
   dmin: 5, dmax: 26,
-  M: 56,          // 左右留白
+  M: 116,         // 左留白（要放得下行标 + 层回边的竖直通道）
+  MR: 40,         // 右留白
+  CHX: 50,        // 层回边走的竖直通道（在外层框内、子层框外）
   A: 46,          // 列与列之间的间距（放箭头和算子名）
   padTop: 58,     // 组标题 + 残差捷径线 占的高度
   resY: 36,       // 捷径线相对分组框顶的 y
@@ -759,8 +765,10 @@ function drawArch(p, r){
   const LA = layout(attnCols, M), LF = layout(ffnCols, M),
         LT = layout(topCols, M), LO = layout(outCols, M);
   const W = Math.max(620,
-    LT.right + M, LO.right + M,
-    LA.right + GEO.wPlus + M, LF.right + GEO.wPlus + M);
+    LT.right + GEO.MR, LO.right + GEO.MR,
+    LA.right + GEO.wPlus + GEO.MR, LF.right + GEO.wPlus + GEO.MR);
+  const GX = M - 46, GW = W - GX - 20;        // 子层分组框
+  const OX = M - 86, OW = W - OX - 8;         // 外层「× L 层」框
 
   let svg = `<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">`
           + `<rect width="6" height="6" fill="var(--code)"/>`
@@ -810,7 +818,7 @@ function drawArch(p, r){
   y = G.bottom + 46;
 
   // ── 自注意力 ──
-  let gTop = y; y += GEO.padTop;
+  let gTop = y; const layerTop = y; y += GEO.padTop;
   G = rowGeom(LA.cols, y);
   const mA = G.at(1);
   for(const c of LA.cols) for(const it of c.items) svg += box(it.bx, yb(it.t, G.at(it.rw)), it.t);
@@ -839,8 +847,8 @@ function drawArch(p, r){
   svg += dot(aP, mA, "⊕", 1);
   link = {x: aP, y: mA + 11};
   y = G.bottom + 10;
-  svg += `<rect class="grpbox" x="${M-44}" y="${gTop}" width="${W-2*(M-44)}" height="${y-gTop}" rx="8"/>`
-       + `<text class="grp" x="${M-32}" y="${gTop+20}">自注意力 · ${ATTN[p.attn]}`
+  svg += `<rect class="grpbox" x="${GX}" y="${gTop}" width="${GW}" height="${y-gTop}" rx="8"/>`
+       + `<text class="grp" x="${GX+12}" y="${gTop+20}">自注意力 · ${ATTN[p.attn]}`
        + `　h=${N(h)}，n_kv=${N(nkv)}，d_k=${N(dk)}　→ d_q=${N(dq)}，d_kv=${N(dkv)}　斜纹 = 权重</text>`;
   y += 46;
 
@@ -880,16 +888,28 @@ function drawArch(p, r){
   svg += dot(fP, mF, "⊕", 1);
   link = {x: fP, y: mF + 11};
   y = G.bottom + 10;
-  svg += `<rect class="grpbox" x="${M-44}" y="${gTop}" width="${W-2*(M-44)}" height="${y-gTop}" rx="8"/>`
-       + `<text class="grp" x="${M-32}" y="${gTop+20}">前馈 · ${ff.label}`
+  svg += `<rect class="grpbox" x="${GX}" y="${gTop}" width="${GW}" height="${y-gTop}" rx="8"/>`
+       + `<text class="grp" x="${GX+12}" y="${gTop+20}">前馈 · ${ff.label}`
        + `　${ff.n} 个 d×d_ff 矩阵，激活 ${ff.act}${gated?"，门控":"，不门控"}</text>`;
-  y += 52;
+  // ── 一层 = 上面两个子层。套一个外框，再画一条回到自己入口的回边 ──
+  const loopY = y + 30;                       // 回边在下方走的那一横
+  const layerBot = loopY + 32;
+  svg += `<rect class="layerbox" x="${OX}" y="${layerTop-24}" width="${OW}" height="${layerBot-layerTop+24}" rx="10"/>`
+       + `<text class="layer" x="${OX+14}" y="${layerTop-9}">`
+       + `Transformer Block —— 上面这两个子层就是一层，整个模型把它叠 L = ${N(L)} 次</text>`;
+  // 回边：从前馈的 ⊕ 往下、往左走到通道、再往上、从左侧进注意力那个 x
+  const xIn = LA.cols[0].items[0], xInL = xIn.bx, xInMid = mA;
+  svg += `<path class="looparr" d="M ${fP} ${mF+11} V ${loopY} H ${GEO.CHX} V ${xInMid} H ${xInL-9}"/>`
+       + `<path d="M ${xInL} ${xInMid} l -9 -5 l 0 10 z" fill="var(--accent)"/>`
+       + `<text class="layerlbl" x="${(GEO.CHX+fP)/2}" y="${loopY-8}" text-anchor="middle">`
+       + `↻ 这一层的输出 = 下一层的输入，走 ${N(L)} 遍</text>`;
+  y = layerBot + 52;
 
   // ── 出口 ──
   G = rowGeom(LO.cols, y);
   const mO = G.at(0);
   const lf = B_(LO,0);
-  svg += loop(lf.bx + px(d)/2, yb(lf.t, mO) - px(T), y - 26, `↻ 以上两个子层重复 L = ${N(L)} 次`);
+  svg += loop(lf.bx + px(d)/2, yb(lf.t, mO) - px(T), y - 26, `第 ${N(L)} 层的输出`);
   for(const c of LO.cols) for(const it of c.items) svg += box(it.bx, yb(it.t, mO), it.t);
   for(let i=0;i<2;i++){
     const a = B_(LO,i), b = B_(LO,i+1);
