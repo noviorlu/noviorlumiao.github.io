@@ -33,8 +33,40 @@
   .sticky{position:sticky; top:20px}
   @media (max-width:900px){ .sticky{position:static} }
   h2{font-size:15px; margin:0 0 14px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted)}
-  h3{font-size:16px; margin:30px 0 10px}
-  h3:first-of-type{margin-top:0}
+
+  /* ── 折叠卡片 ── */
+  .toolbar{display:flex; gap:8px; align-items:center; margin-bottom:12px}
+  .toolbar button{
+    font:12px/1 var(--mono); padding:7px 11px; cursor:pointer; color:var(--muted);
+    background:var(--panel); border:1px solid var(--line); border-radius:6px;
+  }
+  .toolbar button:hover{border-color:var(--accent); color:var(--accent)}
+  .toolbar .hint{font-size:12px; color:var(--muted); margin-left:auto}
+
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:10px; margin-bottom:10px}
+  .card summary{
+    display:flex; align-items:center; gap:11px; padding:13px 16px;
+    cursor:pointer; list-style:none; border-radius:9px;
+  }
+  .card summary::-webkit-details-marker{display:none}
+  .card summary:hover{background:var(--code)}
+  .card summary:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+  .card[open]{border-color:var(--accent)}
+  .card[open] summary{border-bottom:1px solid var(--line); border-radius:9px 9px 0 0}
+  .card .arw{flex:none; width:13px; color:var(--muted); font-size:11px; transition:transform .15s ease}
+  .card[open] .arw{transform:rotate(90deg)}
+  .card .num{
+    flex:none; width:21px; height:21px; border-radius:50%; background:var(--accent-soft);
+    color:var(--accent); font:11px/21px var(--mono); font-weight:700; text-align:center;
+  }
+  .card .ttl{font-size:15px; font-weight:600}
+  .card .hd{margin-left:auto; text-align:right; font:12.5px/1.4 var(--mono); color:var(--accent); white-space:nowrap}
+  .card .hd.warn{color:var(--warn)}
+  .card .body{padding:16px}
+  @media (max-width:640px){
+    .card summary{flex-wrap:wrap; row-gap:6px}
+    .card .hd{margin-left:45px; flex-basis:100%; text-align:left; white-space:normal}
+  }
 
   .presets{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px}
   .presets button{
@@ -123,22 +155,38 @@
     <div class="field"><label>显存带宽 <small>TB/s</small></label><input id="bw" type="number" value="3.35" step="0.01"></div>
     <div class="field"><label>MFU <small>0–1</small></label><input id="mfu" type="number" value="0.5" step="0.05"></div>
     <div class="field"><label>训练步数 <small>steps</small></label><input id="steps" type="number" value="400000"></div>
+    <div class="field"><label>训练 batch <small>只用于第 7 段</small></label><input id="tB" type="number" value="1024"></div>
+    <p class="note" style="font-size:12px; margin:6px 0 0">上面的 <code>B</code> 是<b>单卡</b>放得下的 batch（第 5 段用），
+    这里的是<b>全局</b> batch（第 7 段用）。两者相差的倍数就是梯度累积 × 数据并行。</p>
   </aside>
 
   <!-- ── 输出 ── -->
   <main>
 
-    <div class="panel">
-      <h3>一、参数量与权重显存</h3>
+    <div class="toolbar">
+      <button id="openAll">全部展开</button>
+      <button id="closeAll">全部收起</button>
+      <span class="hint">收起时右侧仍是实时结果，改配置即刷新</span>
+    </div>
+
+    <details class="card">
+      <summary><span class="arw">▸</span><span class="num">1</span>
+        <span class="ttl">参数量与权重显存</span><span class="hd" id="hd1"></span></summary>
+      <div class="body">
       <div class="eq">P = <b>2·V·d</b> + L·(<b>4·d²</b> + <b>3·d·d_ff</b> + <b>2·d</b>) + <b>d</b>
   ≈ 2·V·d + 12·L·d²      ← 每层 4d²(attn) + 8d²(ffn) = 12d²</div>
       <div class="scroll"><table id="tParams"></table></div>
-      <p class="note"><b>embedding 和 lm_head 各占一份 V·d</b>——本作业不做 weight tying，所以 V·d 要算两次。
-      但 FLOPs 里只算一次（embedding 是查表，0 FLOPs），这个不对称在第五段的横向对比里是关键。</p>
-    </div>
+      <p class="note"><b>embedding 和 lm_head 各占一份 V·d</b>——本作业不做 weight tying，所以 V·d 要算两次，
+      但 FLOPs 里只算一次（embedding 是查表，0 FLOPs）。这个不对称在小模型上很显眼：切到
+      <b>GPT-2 small</b> 预设，lm_head 一项独占 27% 的前向 FLOPs；到了 <b>XL</b> 只剩 4.7%——
+      因为 12·L·d² 涨得比 2·V·d 快得多。</p>
+      </div>
+    </details>
 
-    <div class="panel" style="margin-top:20px">
-      <h3>二、一次 forward 的 FLOPs</h3>
+    <details class="card">
+      <summary><span class="arw">▸</span><span class="num">2</span>
+        <span class="ttl">一次 forward 的 FLOPs</span><span class="hd" id="hd2"></span></summary>
+      <div class="body">
       <div class="eq">矩阵乘 A(m×n) @ B(n×p)  =  <b>2·m·n·p</b> FLOPs     每个输出元素 = 长度 n 的点积 = n 乘 + n 加
 推论：x[T,d_in] @ W[d_in,d_out]  =  <b>2 · token数 · 参数量</b>     数完参数量就等于数完了 FLOPs</div>
       <div class="scroll"><table id="tFlops"></table></div>
@@ -146,27 +194,36 @@
 总计 = L·每层 + <b>2·T·d·V</b>（lm_head）</div>
       <p class="note">整张表里只有 <code>Q@K^T</code> 和 <code>scores@V</code> 让 T 出现两次——<b>那是 T² 的唯一来源</b>。
       头数 h 在这两项里被消掉了，因为 h·d_k = d 恒成立。</p>
-    </div>
+      </div>
+    </details>
 
-    <div class="panel" style="margin-top:20px">
-      <h3>三、四大块的占比</h3>
+    <details class="card">
+      <summary><span class="arw">▸</span><span class="num">3</span>
+        <span class="ttl">四大块的占比</span><span class="hd" id="hd3"></span></summary>
+      <div class="body">
       <div class="bar" id="barFlops"></div>
       <div class="legend" id="legFlops"></div>
       <div class="scroll" style="margin-top:14px"><table id="tBlocks"></table></div>
       <p class="note" id="blockNote"></p>
-    </div>
+      </div>
+    </details>
 
-    <div class="panel" style="margin-top:20px">
-      <h3>四、从一次前向推到一步训练</h3>
+    <details class="card">
+      <summary><span class="arw">▸</span><span class="num">4</span>
+        <span class="ttl">从一次前向推到一步训练</span><span class="hd" id="hd4"></span></summary>
+      <div class="body">
       <div class="eq">反向 ≈ 2 × 前向     每个权重矩阵反向要算两次：对输入的梯度 + 对权重的梯度
 <b>一步训练 ≈ 3 × 一次前向</b>
 AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开方、除法、累加</div>
       <div class="kpis" id="kStep"></div>
       <p class="note"><b>优化器的算力可以忽略</b>，它的代价全在显存上。AdamW 贵在 2× 的状态，不贵在计算。</p>
-    </div>
+      </div>
+    </details>
 
-    <div class="panel" style="margin-top:20px">
-      <h3>五、显存：4P 是地板，激活值是天花板</h3>
+    <details class="card">
+      <summary><span class="arw">▸</span><span class="num">5</span>
+        <span class="ttl">显存：4P 是地板，激活值是天花板</span><span class="hd" id="hd5"></span></summary>
+      <div class="body">
       <div class="eq">固定部分 = <b>4P</b>     参数(P) + 梯度(P) + AdamW 的 m、v(2P)
 
 每层激活 = <b>8·B·T·d</b> + <b>2·B·h·T²</b> + <b>4·B·T·d_ff</b>
@@ -180,33 +237,43 @@ A = L·(每层) + <b>B·T·d</b> + <b>2·B·T·V</b>      出口的 norm、logit
       <div class="legend" id="legAct"></div>
       <div class="scroll" style="margin-top:14px"><table id="tAct"></table></div>
       <p class="note" id="actNote"></p>
-    </div>
+      </div>
+    </details>
 
-    <div class="panel" style="margin-top:20px">
-      <h3>六、FLOPs 占比 ≠ 时间占比：arithmetic intensity</h3>
+    <details class="card">
+      <summary><span class="arw">▸</span><span class="num">6</span>
+        <span class="ttl">FLOPs 占比 ≠ 时间占比：arithmetic intensity</span><span class="hd" id="hd6"></span></summary>
+      <div class="body">
       <div class="eq">AI = FLOPs / 从显存搬运的字节数        [FLOP/byte]
 机器平衡点 = 峰值算力 / 显存带宽
 AI &gt; 平衡点 → compute-bound（算力吃满）    AI &lt; 平衡点 → memory-bound（在等数据）</div>
       <p class="note" id="aiDtype"></p>
       <div class="scroll"><table id="tAI"></table></div>
       <p class="note" id="aiNote"></p>
-    </div>
+      </div>
+    </details>
 
-    <div class="panel" style="margin-top:20px">
-      <h3>七、训完要多久</h3>
-      <div class="eq">总量 = <b>3 × 前向FLOPs × B × steps</b>
+    <details class="card">
+      <summary><span class="arw">▸</span><span class="num">7</span>
+        <span class="ttl">训完要多久</span><span class="hd" id="hd7"></span></summary>
+      <div class="body">
+      <div class="eq">总量 = <b>3 × 前向FLOPs × 训练batch × steps</b>     注意用的是全局 batch，不是第 5 段那个单卡 B
 耗时 = 总量 / (峰值算力 × MFU)</div>
       <div class="kpis" id="kTime"></div>
       <p class="note" id="timeNote"></p>
-    </div>
+      </div>
+    </details>
 
-    <div class="panel" style="margin-top:20px">
-      <h3>八、上下文拉长会发生什么</h3>
+    <details class="card">
+      <summary><span class="arw">▸</span><span class="num">8</span>
+        <span class="ttl">上下文拉长会发生什么</span><span class="hd" id="hd8"></span></summary>
+      <div class="body">
       <p class="note">FLOPs 里只有注意力打分是 T 的平方项，其余都是线性。所以 T 一长，占比结构会翻转。
       交叉点（线性项 = 平方项）：<code>T* = V/(2L) + 6·d ≈ 6·d_model</code></p>
       <div class="scroll"><table id="tScale"></table></div>
       <p class="note" id="scaleNote"></p>
-    </div>
+      </div>
+    </details>
 
   </main>
 </div>
@@ -220,7 +287,7 @@ AI &gt; 平衡点 → compute-bound（算力吃满）    AI &lt; 平衡点 → m
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const IN = ["V","T","L","d","h","dff","B","bpe","vram","peak","bw","mfu","steps"];
+const IN = ["V","T","L","d","h","dff","B","bpe","vram","peak","bw","mfu","steps","tB"];
 const PRESETS = {
   "GPT-2 small":  {V:50257,T:1024,L:12,d:768, h:12,dff:2048},
   "GPT-2 medium": {V:50257,T:1024,L:24,d:1024,h:16,dff:2752},
@@ -247,11 +314,26 @@ function flops(f){
   if(f>=1e9)  return fmt(f/1e9)+" GFLOPs";
   return int(f)+" FLOPs";
 }
-function dur(s){
+function cnt(n){
+  if(n>=1e9) return fmt(n/1e9)+" B";
+  if(n>=1e6) return fmt(n/1e6)+" M";
+  if(n>=1e3) return fmt(n/1e3)+" K";
+  return int(n);
+}
+function durShort(s){
   if(s<3600) return fmt(s/60,1)+" 分钟";
   const h=s/3600;
-  if(h<48) return fmt(h,1)+" 小时";
-  return fmt(h/24,1)+" 天（"+int(h)+" 小时）";
+  return h<48 ? fmt(h,1)+" 小时" : fmt(h/24,1)+" 天";
+}
+function dur(s){
+  if(s<3600 || s/3600<48) return durShort(s);
+  return durShort(s)+"（"+int(s/3600)+" 小时）";
+}
+// 卡片收起时显示的一行结论
+function hd(i, html, warn){
+  const el = $("hd"+i);
+  el.innerHTML = html;
+  el.classList.toggle("warn", !!warn);
 }
 function tbl(el, head, rows, totalRow){
   let H = "<thead><tr>" + head.map((c,i)=>`<th class="${i===1?'f':''}">${c}</th>`).join("") + "</tr></thead><tbody>";
@@ -416,16 +498,16 @@ function render(){
     ` 解码时 T=1，投影的 AI 降到 <code>d/(2+d) ≈ 1</code>，极度 memory-bound——这是自回归生成慢的根本原因。`;
 
   // 七、时间
-  const totalF = stepF*B*p.steps, sec = totalF/(p.peak*1e12*p.mfu);
+  const totalF = stepF*p.tB*p.steps, sec = totalF/(p.peak*1e12*p.mfu);
   $("kTime").innerHTML = [
-    ["总算力","3·F·B·steps", flops(totalF)],
+    ["总算力","3·F·batch·steps", flops(totalF)],
     ["有效算力",`${fmt(p.peak,0)}×${p.mfu}`, fmt(p.peak*p.mfu,0)+" TFLOP/s"],
     ["单卡耗时","总量/有效算力", dur(sec)],
     ["两周训完需要","耗时 / 14 天", fmt(sec/(14*86400),1)+" 张卡"],
   ].map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v">${k[2]}</div><div class="s">${k[1]}</div></div>`).join("");
   $("timeNote").innerHTML = maxB>0
-    ? `注意这里假设 batch=${int(B)}，而上面算出单卡最多放 <b>${int(maxB)}</b>——`+
-      (B>maxB?`相差 <b>${fmt(B/maxB,0)} 倍</b>，`:"")+`这就是梯度累积和数据并行存在的理由。`
+    ? `全局 batch 是 <b>${int(p.tB)}</b>，而第 5 段算出单卡最多放 <b>${int(maxB)}</b>——`+
+      (p.tB>maxB?`相差 <b>${fmt(p.tB/maxB,0)} 倍</b>，`:"")+`这就是梯度累积和数据并行存在的理由。`
     : `当前配置下单卡连 batch=1 都放不下，必须切分模型。`;
 
   // 八、上下文缩放
@@ -441,6 +523,17 @@ function render(){
   $("scaleNote").innerHTML = `当前 d=${int(d)}，交叉点 <code>T* ≈ V/(2L)+6d = ${int(Tstar)}</code>。`+
     ` 上下文超过它，注意力的平方项就压过整个模型的其余部分。`+
     ` 当前 T=${int(T)} ${T<Tstar?"<b>还在线性区</b>":"<b>已经进入平方区</b>"}。`;
+
+  // ── 卡片收起时的一行结论 ──
+  hd(1, `P = ${cnt(r.P)} · 权重 ${bytes(bpe*r.P)}`);
+  hd(2, `${flops(r.F)} / 次前向`);
+  hd(3, `最大块 ${big.k} ${pct(big.v/r.F)}`);
+  hd(4, `${flops(stepF)} / 步 · 优化器仅 ${pct(optF/stepF)}`);
+  hd(5, `${bytes(total)} / ${int(p.vram)} GB`, total > vramB);
+  hd(6, bad.length ? `${bad.length}/${r.ai.length} 项 memory-bound` : `${r.ai.length} 项全 compute-bound`,
+        bad.length > 0);
+  hd(7, `${durShort(sec)} · 单卡`);
+  hd(8, `T* ≈ ${int(Tstar)}，当前${T<Tstar?"在线性区":"已进平方区"}`, T>=Tstar);
 }
 
 // 初始化
@@ -454,6 +547,11 @@ $("presets").addEventListener("click", e=>{
 });
 IN.forEach(k=>$(k).addEventListener("input", render));
 $("autoff").addEventListener("change", render);
+
+const CARDS = [...document.querySelectorAll("details.card")];
+$("openAll").addEventListener("click",  ()=>CARDS.forEach(c=>c.open = true));
+$("closeAll").addEventListener("click", ()=>CARDS.forEach(c=>c.open = false));
+
 render();
 </script>
 </body>
