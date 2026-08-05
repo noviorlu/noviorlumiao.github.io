@@ -23,7 +23,7 @@
     margin:0; background:var(--bg); color:var(--ink);
     font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC",sans-serif;
   }
-  .wrap{max-width:1180px; margin:0 auto; padding:32px 20px 80px}
+  .wrap{max-width:1560px; margin:0 auto; padding:32px 20px 80px}
   header h1{font-size:26px; margin:0 0 6px; letter-spacing:-.2px}
   header p{color:var(--muted); margin:0 0 4px; max-width:70ch}
   header .src{font-size:13px; color:var(--muted)}
@@ -134,6 +134,14 @@
   .pcell b{position:relative; display:block; text-align:right; padding-right:6px;
     font:11.5px/19px var(--mono); font-weight:500; color:var(--ink)}
   tr.total .pcell i{opacity:.42}
+  /* 每个小节：左边放可视化和数据，右边放这一块的说明 */
+  .row2{display:grid; grid-template-columns:minmax(0,1fr) 264px; gap:20px; align-items:start; margin-bottom:20px}
+  @media (max-width:1180px){ .row2{grid-template-columns:minmax(0,1fr)} }
+  .c-side{border-left:2px solid var(--line); padding-left:13px; min-width:0}
+  .c-side .note{margin:0 0 10px; font-size:12.5px; line-height:1.7}
+  .c-side .note:last-child{margin-bottom:0}
+  .c-side .sidelab{font:10.5px var(--mono); color:var(--muted); text-transform:uppercase;
+    letter-spacing:.06em; margin:0 0 7px}
   .sub-h{font-size:14px; margin:26px 0 8px; padding-top:14px; border-top:1px solid var(--line)}
 
   .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:14px 0}
@@ -288,35 +296,35 @@
       <summary><span class="arw">▸</span><span class="num">图</span>
         <span class="ttl">架构：一个 token 走完全程</span><span class="hd" id="hd0"></span></summary>
       <div class="body">
-      <div class="archbar">
-        <button id="azOut">−</button><button id="azIn">＋</button>
-        <button id="azFit">适应</button><button id="az100">1:1</button>
-        <span class="hint">滚轮缩放 · 拖拽平移 · 双指捏合 · 双击复位</span>
+      <div class="row2">
+        <div>
+          <div class="archbar">
+            <button id="azOut">−</button><button id="azIn">＋</button>
+            <button id="azFit">适应</button><button id="az100">1:1</button>
+            <span class="hint">滚轮缩放 · 拖拽平移 · 双指捏合 · 双击复位</span>
+          </div>
+          <div class="archcanvas" id="archcanvas">
+            <div id="archwrap" style="position:absolute; inset:0"></div>
+            <div class="archzoom" id="azLbl">100%</div>
+          </div>
+        </div>
+        <aside class="c-side">
+          <p class="sidelab">怎么看这张图</p>
+          <p class="note"><b>盒子边长按 √元素数</b>，面积大致对应张量大小；比例是真的，但被开方压缩过。
+          真实维度写在盒子旁边，超上限的那一维画成撕裂边 <span style="font-family:var(--mono)">⌇</span>。
+          停在盒子上能看到精确元素数和字节数。</p>
+          <p class="note"><span class="tag ok">绿</span> 残差流与捷径　<span class="tag bad">橙</span> 含 T² 的张量<br>
+          <b>斜纹</b> = 权重（每层一份），实心 = 激活。</p>
+          <p class="note"><b>多头 = 往后摞起来的切片，一片一个头</b>（超过 6 个只画 6 片，真实头数标在右上角）。
+          每个头有固定颜色，从 Q/K/V 一路带到 ctx，再带到「拼接后」的对应一段——
+          <b>拼头就是把 h 片沿特征维接成一条</b>，接完宽度回到 <code>d_q</code> 才能喂给 W_o。</p>
+          <p class="note">每摞下面的细横杠是<b>拼接后有多宽</b>：GQA 下 K、V 只有 Q 的 n_kv/h，省的就是 KV cache。</p>
+          <p class="note"><b>绿色粗线是残差流</b>，中途分出的<b>捷径绕过整个子层</b>落到 ⊕，取的是
+          <b>进 RMSNorm 之前的原始 x</b>——归一化只作用在子层内部那一支，这就是 pre-norm。
+          橙色外框和回边表示<b>这两个子层重复 L 次</b>。</p>
+          <p class="note" id="archNote"></p>
+        </aside>
       </div>
-      <div class="archcanvas" id="archcanvas">
-        <div id="archwrap" style="position:absolute; inset:0"></div>
-        <div class="archzoom" id="azLbl">100%</div>
-      </div>
-      <p class="note" style="font-size:12.5px; margin-top:14px">
-        <b>每个盒子的边长按 √元素数 画</b>，所以面积大致对应张量的大小，比例是真的、但被开方压缩过
-        （否则 <code>V</code> 那一维会把版面撑爆）。真实维度写在盒子旁边，超过上限的那一维画成撕裂边
-        <span style="font-family:var(--mono)">⌇</span>。往盒子上一停能看到精确元素数和字节数。画布可以滚轮缩放、拖着平移，双击复位。<br>
-        <span class="tag ok">绿</span> 残差流与它的捷径 &nbsp;
-        <span class="tag bad">橙</span> 含 T² 的张量 &nbsp;
-        <b>斜纹</b> = 权重矩阵（每层各一份），实心 = 激活张量。<br>
-        <b>多头画成往右后方摞起来的切片，一片就是一个头</b>（头多于 6 个时只画 6 片，
-        真实头数标在右上角）。Q / K / V / scores / ctx 都是这样。<br>
-        <b>每个头有自己的颜色</b>，从 Q/K/V 一路带到 ctx，再带到「拼接后」那个盒子里的
-        对应一段——<b>「拼头」就是把这 h 片沿特征维接成一条</b>，颜色能直接对上，
-        接完宽度正好回到 <code>h·d_k = d_q</code>，才能喂给 W_o。<br>
-        每摞下面那条细横杠也是<b>这些头拼接后有多宽</b>：Q 拼起来是 d_q，
-        而 <b>GQA 下 K、V 的横杠只有 Q 的 n_kv/h</b>——省下的就是 KV cache。
-        右上角的小坐标轴标了三个方向分别是什么维。<br>
-        <b>绿色那条粗线是残差流本身</b>：从上一段的 ⊕ 一路接到下一个子层的入口，中途分出一条<b>捷径</b>
-        绕过整个子层直接落到 ⊕。捷径取的是<b>进 RMSNorm 之前的原始 x</b>——归一化只作用在子层内部那一支，
-        残差通路始终干净，这就是 pre-norm。橙色外框和它底下那条回边表示<b>这两个子层重复 L 次</b>。</p>
-      <p class="note" id="archNote"></p>
-
       </div>
     </details>
 
@@ -326,37 +334,60 @@
       <div class="body">
 
       <h4 class="sub-h" style="border:0; padding-top:0; margin-top:0">一次 forward 的 FLOPs</h4>
-      <div class="eq">矩阵乘 A(m×n) @ B(n×p)  =  <b>2·m·n·p</b> FLOPs     每个输出元素 = 长度 n 的点积 = n 乘 + n 加
-推论：x[T,d_in] @ W[d_in,d_out]  =  <b>2 · token数 · 参数量</b>     数完参数量就等于数完了 FLOPs</div>
-      <div class="scroll"><table id="tFlops"></table></div>
-      <div class="eq" id="eqFlops"></div>
-      <p class="note">整张表里只有 <code>Q@Kᵀ</code> 和 <code>scores@V</code> 让 T 出现两次——<b>那是 T² 的唯一来源</b>，
-      下面「上下文拉长」那节整节都在算它。<b>零 FLOPs 的行同样值得看</b>：归一化、RoPE、softmax、残差加、
-      拼头，全是逐元素或换布局，一次乘法都不做——所以「数完参数量就等于数完 FLOPs」只在带权重的那些行上成立。</p>
+      <div class="row2">
+        <div>
+          <div class="eq">A(m×n) @ B(n×p)  =  <b>2·m·n·p</b> FLOPs
+x[T,d_in] @ W[d_in,d_out]  =  <b>2 · token数 · 参数量</b></div>
+          <div class="scroll"><table id="tFlops"></table></div>
+          <div class="eq" id="eqFlops"></div>
+        </div>
+        <aside class="c-side">
+          <p class="sidelab">读这张表</p>
+          <p class="note">矩阵乘每个输出元素是一次长度 n 的点积 = n 乘 + n 加，所以是 <b>2mnp</b>。
+          推论：<b>数完参数量就等于数完了 FLOPs</b>——但只对带权重的行成立。</p>
+          <p class="note"><b>零 FLOPs 的行同样值得看</b>：归一化、RoPE、softmax、残差加、拼头，
+          全是逐元素或换布局，一次乘法都不做。</p>
+          <p class="note">只有 <code>Q@Kᵀ</code> 和 <code>scores@V</code> 让 T 出现两次——<b>那是 T² 的唯一来源</b>，
+          下面「上下文拉长」整节都在算它。</p>
+        </aside>
+      </div>
 
       <h4 class="sub-h">从一次前向推到一步训练</h4>
-      <div class="eq">反向 ≈ 2 × 前向     每个权重矩阵反向要算两次：对输入的梯度 + 对权重的梯度
-<b>一步训练 ≈ 3 × 一次前向</b>
-AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开方、除法、累加</div>
-      <div class="kpis" id="kStep"></div>
-      <p class="note"><b>优化器的算力可以忽略</b>，它的代价全在显存上——见第 2 段。AdamW 贵在 2× 的状态，不贵在计算。</p>
+      <div class="row2">
+        <div>
+          <div class="eq"><b>一步训练 ≈ 3 × 一次前向</b>
+AdamW 一步 ≈ <b>14·P</b></div>
+          <div class="kpis" id="kStep"></div>
+        </div>
+        <aside class="c-side">
+          <p class="sidelab">为什么是 3×</p>
+          <p class="note">反向 ≈ 2 × 前向：每个权重矩阵反向要算两次——<b>对输入的梯度</b>和<b>对权重的梯度</b>。</p>
+          <p class="note">AdamW 是逐元素的：缩放、两次滑动平均、开方、除法、累加，约 14 次运算。
+          <b>优化器的算力可以忽略，它的代价全在显存上</b>——见第 2 段。</p>
+        </aside>
+      </div>
 
       <h4 class="sub-h">上下文拉长，FLOPs 的结构会翻转</h4>
-      <p class="note">上面那两个 T² 的项是线性项之外唯一随 T 变快的，所以 T 一长，占比结构会翻转。
-      <b>拖下面这根条</b>——它改的就是左边那个 <code>context_length</code>，整页都会跟着变。
-      橙色刻度是交叉点 <code>T*</code>：拖过它，平方项就压过模型的其余部分。</p>
-      <div class="tslide">
-        <input type="range" id="Tslide" min="0" max="1000" step="1" value="500"
-               aria-label="context_length">
-        <div class="tstar" id="tstarMark"></div>
+      <div class="row2">
+        <div>
+          <div class="tslide">
+            <input type="range" id="Tslide" min="0" max="1000" step="1" value="500" aria-label="context_length">
+            <div class="tstar" id="tstarMark"></div>
+          </div>
+          <div class="tends"><span>64</span><span>1,048,576</span></div>
+          <div class="bar" id="barT"></div>
+          <div class="legend" id="legT"></div>
+          <div class="kpis" id="kT"></div>
+          <div class="eq" id="eqTstar"></div>
+          <div class="scroll"><table id="tScale"></table></div>
+        </div>
+        <aside class="c-side">
+          <p class="sidelab">拖这根条</p>
+          <p class="note">它改的就是左边那个 <code>context_length</code>，整页都会跟着变。
+          <b>橙色刻度是交叉点 T*</b>：拖过它，平方项就压过模型的其余部分。</p>
+          <p class="note" id="scaleNote"></p>
+        </aside>
       </div>
-      <div class="tends"><span>64</span><span>1,048,576</span></div>
-      <div class="bar" id="barT"></div>
-      <div class="legend" id="legT"></div>
-      <div class="kpis" id="kT"></div>
-      <div class="eq" id="eqTstar"></div>
-      <div class="scroll"><table id="tScale"></table></div>
-      <p class="note" id="scaleNote"></p>
       </div>
     </details>
 
@@ -364,23 +395,38 @@ AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开�
       <summary><span class="arw">▸</span><span class="num">2</span>
         <span class="ttl">显存：4P 是地板，激活值是天花板</span><span class="hd" id="hd2"></span></summary>
       <div class="body">
-      <h4 class="sub-h" style="border:0; padding-top:0; margin-top:0">参数量 —— 4P 的底座</h4>
-      <div class="eq" id="eqParams"></div>
-      <div class="scroll"><table id="tParams"></table></div>
-      <p class="note"><b>embedding 和 lm_head 各占一份 V·d</b>——本作业不做 weight tying，所以 V·d 要算两次。
-      这两份在显存上一样重，但在算力上完全不同（embedding 是查表，0 FLOPs）——差别见第 3 段。</p>
-      <p class="note" id="paramCheck"></p>
 
-      <h4 class="sub-h">训练时常驻的 4P</h4>
-      <div class="eq" id="eqMem"></div>
-      <div class="kpis" id="kMem"></div>
-      <h4 class="sub-h">激活值都花在哪</h4>
-      <div class="bar" id="barAct"></div>
-      <div class="legend" id="legAct"></div>
-      <div class="scroll" style="margin-top:14px"><table id="tAct"></table></div>
-      <p class="note" id="actNote"></p>
-      <h4 class="sub-h">KV cache（推理才有的一笔）</h4>
-      <p class="note" id="kvNote"></p>
+      <h4 class="sub-h" style="border:0; padding-top:0; margin-top:0">参数量 —— 4P 的底座</h4>
+      <div class="row2">
+        <div>
+          <div class="eq" id="eqParams"></div>
+          <div class="scroll"><table id="tParams"></table></div>
+        </div>
+        <aside class="c-side">
+          <p class="sidelab">两份 V·d</p>
+          <p class="note"><b>embedding 和 lm_head 各占一份 V·d</b>——本作业不做 weight tying，所以要算两次。
+          这两份在显存上一样重，在算力上完全不同（embedding 是查表，0 FLOPs）——差别见第 3 段。</p>
+          <p class="note" id="paramCheck"></p>
+        </aside>
+      </div>
+
+      <h4 class="sub-h">训练时常驻的 4P，加上激活值</h4>
+      <div class="row2">
+        <div>
+          <div class="eq" id="eqMem"></div>
+          <div class="kpis" id="kMem"></div>
+          <div class="bar" id="barAct"></div>
+          <div class="legend" id="legAct"></div>
+          <div class="scroll" style="margin-top:14px"><table id="tAct"></table></div>
+        </div>
+        <aside class="c-side">
+          <p class="sidelab">地板与天花板</p>
+          <p class="note"><b>4P 是地板</b>：参数、梯度、AdamW 的 m 和 v，各一份，训练全程常驻，和 batch 无关。</p>
+          <p class="note" id="actNote"></p>
+          <p class="sidelab" style="margin-top:14px">KV cache</p>
+          <p class="note" id="kvNote"></p>
+        </aside>
+      </div>
       </div>
     </details>
 
@@ -388,18 +434,24 @@ AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开�
       <summary><span class="arw">▸</span><span class="num">3</span>
         <span class="ttl">六大块：占参数 与 占 FLOPs 是两回事</span><span class="hd" id="hd3"></span></summary>
       <div class="body">
-      <p class="note">前两段各自算了一遍：第 1 段给出前向 FLOPs 怎么分，第 2 段给出参数怎么分。
-      <b>把这两个分布并排放，才看得出它们根本不是一回事</b>——有的块只花显存不花算力，有的反过来。
-      这一段不引入任何新公式，只是把已有的两组数换个方式对齐。</p>
-      <p class="note" style="margin-bottom:4px"><b>占参数量</b></p>
-      <div class="bar" id="barParam"></div>
-      <div class="legend" id="legParam"></div>
-      <p class="note" style="margin:14px 0 4px"><b>占前向 FLOPs</b></p>
-      <div class="bar" id="barFlops"></div>
-      <div class="legend" id="legFlops"></div>
-      <div class="scroll" style="margin-top:14px"><table id="tBlocks"></table></div>
-      <p class="note" id="blockNote"></p>
-
+      <div class="row2">
+        <div>
+          <p class="note" style="margin:0 0 4px"><b>占参数量</b></p>
+          <div class="bar" id="barParam"></div>
+          <div class="legend" id="legParam"></div>
+          <p class="note" style="margin:16px 0 4px"><b>占前向 FLOPs</b></p>
+          <div class="bar" id="barFlops"></div>
+          <div class="legend" id="legFlops"></div>
+          <div class="scroll" style="margin-top:16px"><table id="tBlocks"></table></div>
+        </div>
+        <aside class="c-side">
+          <p class="sidelab">这一段在干什么</p>
+          <p class="note">前两段各算了一遍：第 1 段给出 FLOPs 怎么分，第 2 段给出参数怎么分。
+          <b>把两个分布并排，才看得出它们不是一回事</b>——有的块只花显存不花算力，有的反过来。
+          这里不引入新公式。</p>
+          <p class="note" id="blockNote"></p>
+        </aside>
+      </div>
       </div>
     </details>
 
@@ -407,22 +459,34 @@ AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开�
       <summary><span class="arw">▸</span><span class="num">4</span>
         <span class="ttl">训练时间：token 预算 ↔ 天数，两头都能定</span><span class="hd" id="hd4"></span></summary>
       <div class="body">
-      <div class="eq">每个 token 的训练成本 = <b>3·F / T</b>        F 和 3× 见第 1 段，这里直接用
-总算力 = 每 token 成本 × <b>D</b>          D = 目标 token 数
+      <div class="row2">
+        <div>
+          <div class="eq">每 token 成本 = <b>3·F / T</b>　　总算力 = 每 token 成本 × <b>D</b>
 有效算力 = <b>峰值 × MFU × 卡数</b>
 
-<b>天数 = 总算力 / 有效算力</b>        反过来：<b>D = 天数 × 有效算力 × T / (3·F)</b></div>
-      <p class="note" id="twoWay"></p>
-      <div class="kpis" id="kTime"></div>
-      <p class="note" id="timeNote"></p>
+<b>天数 = 总算力 / 有效算力</b>　　<b>D = 天数 × 有效算力 × T / (3·F)</b></div>
+          <div class="kpis" id="kTime"></div>
+        </div>
+        <aside class="c-side">
+          <p class="sidelab">两头都能定</p>
+          <p class="note" id="twoWay"></p>
+          <p class="note" id="timeNote"></p>
+        </aside>
+      </div>
 
       <h4 class="sub-h">为什么 MFU 打不满：arithmetic intensity</h4>
-      <div class="eq">AI = FLOPs / 从显存搬运的字节数        [FLOP/byte]
-机器平衡点 = 峰值算力 / 显存带宽
-AI &gt; 平衡点 → compute-bound（算力吃满）    AI &lt; 平衡点 → memory-bound（在等数据）</div>
-      <p class="note" id="aiDtype"></p>
-      <div class="scroll"><table id="tAI"></table></div>
-      <p class="note" id="aiNote"></p>
+      <div class="row2">
+        <div>
+          <div class="eq">AI = FLOPs / 搬运字节数        机器平衡点 = 峰值算力 / 显存带宽
+AI &gt; 平衡点 → compute-bound        AI &lt; 平衡点 → memory-bound</div>
+          <div class="scroll"><table id="tAI"></table></div>
+        </div>
+        <aside class="c-side">
+          <p class="sidelab">算力打不满的原因</p>
+          <p class="note" id="aiDtype"></p>
+          <p class="note" id="aiNote"></p>
+        </aside>
+      </div>
       </div>
     </details>
 
@@ -1144,7 +1208,7 @@ function render(){
       ["q_proj","d·d_q × L",                  int(L*r.p_q),      bytes(bpe*L*r.p_q),      pct(L*r.p_q/r.P)],
       ["k_proj + v_proj","2·d·d_kv × L",int(L*(r.p_k+r.p_v)),bytes(bpe*L*(r.p_k+r.p_v)),pct(L*(r.p_k+r.p_v)/r.P)],
       ["output_proj","d_q·d × L",             int(L*r.p_o),      bytes(bpe*L*r.p_o),      pct(L*r.p_o/r.P)],
-      [`${ff.label} 的 ${ff.n} 个矩阵`,`${ff.n}·d·d_ff × L`, int(L*r.ffnP), bytes(bpe*L*r.ffnP), pct(L*r.ffnP/r.P)],
+      [`${ff.label} ×${ff.n}`,`${ff.n}·d·d_ff × L`, int(L*r.ffnP), bytes(bpe*L*r.ffnP), pct(L*r.ffnP/r.P)],
       ["ln1/ln2","2·d × L",                int(L*r.norms),    bytes(bpe*L*r.norms),    pct(L*r.norms/r.P)],
       ["ln_final","d",                     int(d),            bytes(bpe*d),            pct(d/r.P)],
       ["lm_head","d·V",                    int(r.lmh),        bytes(bpe*r.lmh),        pct(r.lmh/r.P)],
@@ -1157,32 +1221,32 @@ function render(){
   // 每层的算子。第 4 列是单次 FLOPs，占比统一按 ×L 算。零 FLOPs 的也列出来，
   // 因为"哪些步骤不花算力"和"哪些花"一样重要。
   const layerOps = [
-    ["RMSNorm ln1 ×γ₁",  "逐元素",        SH.st, 0],
+    ["ln1 ×γ₁",         "逐元素",   SH.st, 0],
     ["x @ Wq",           "2·T·d·d_q",     SH.q,  r.f_q],
     ["x @ Wk",           "2·T·d·d_kv",    SH.kv, r.f_kv],
     ["x @ Wv",           "2·T·d·d_kv",    SH.kv, r.f_kv],
-    ["RoPE(Q), RoPE(K)", "逐元素",        "—",   0],
+    ["RoPE(Q), RoPE(K)","逐元素",   "—",   0],
     ["Q @ Kᵀ / √d_k",    "2·T²·d_q",      SH.sc, r.f_score],
-    ["mask + softmax",   "逐元素",        SH.sc, 0],
+    ["softmax",         "逐元素",   SH.sc, 0],
     ["scores @ V",       "2·T²·d_q",      SH.q,  r.f_ctx],
-    ["拼头 rearrange",    "只换布局",      SH.st, 0],
+    ["拼头",             "换布局",   SH.st, 0],
     ["@ Wo",             "2·T·d_q·d",     SH.st, r.f_o],
-    ["x = x + attn",     "逐元素",        SH.st, 0],
-    ["RMSNorm ln2 ×γ₂",  "逐元素",        SH.st, 0],
+    ["+ attn",          "逐元素",   SH.st, 0],
+    ["ln2 ×γ₂",         "逐元素",   SH.st, 0],
   ].concat(ff.gated
     ? [["x @ W1（门）","2·T·d·d_ff",SH.ff,r.f_ff1], ["x @ W3（值）","2·T·d·d_ff",SH.ff,r.f_ff1],
-       [`${ff.act}(门) ⊙ 值`,"逐元素",SH.ff,0],     ["@ W2","2·T·d·d_ff",SH.st,r.f_ff1]]
+       [`${ff.act}(门)⊙值`,"逐元素",SH.ff,0],     ["@ W2","2·T·d·d_ff",SH.st,r.f_ff1]]
     : [["x @ W_in","2·T·d·d_ff",SH.ff,r.f_ff1], [`${ff.act}(·)`,"逐元素",SH.ff,0],
        ["@ W_out","2·T·d·d_ff",SH.st,r.f_ff1]]
-  ).concat([["x = x + ffn", "逐元素", SH.st, 0]]);
+  ).concat([["+ ffn", "逐元素", SH.st, 0]]);
   const fRows = layerOps.map(x=>[x[0],x[1],x[2], x[3]?flops(x[3]):"0", x[3]?pct(x[3]*L/r.F):"—"]);
   fRows.push(["每层小计", `2T(2·d·d_q+2·d·d_kv) + 4T²·d_q + ${ff.n}·2T·d·d_ff`, SH.st,
               flops(r.perLayer), pct(L*r.perLayer/r.F)]);
-  fRows.push(["token_embeddings", "查表 gather", SH.st, "0", "—"]);
-  fRows.push(["RMSNorm ln_final ×γ", "逐元素", SH.st, "0", "—"]);
+  fRows.push(["embed 查表", "gather", SH.st, "0", "—"]);
+  fRows.push(["ln_f ×γ", "逐元素", SH.st, "0", "—"]);
   fRows.push(["x @ lm_head", "2·T·d·V", SH.lg, flops(r.f_lm), pct(r.f_lm/r.F)]);
-  fRows.push(["softmax / cross-entropy", "逐元素", SH.lg, "0", "—"]);
-  tbl($("tFlops"), ["算子","符号 FLOPs","输出形状","单次","×L 后占前向"], fRows,
+  fRows.push(["softmax / CE", "逐元素", SH.lg, "0", "—"]);
+  tbl($("tFlops"), ["算子","符号","输出形状","单次","占前向"], fRows,
       ["一次 forward 总计","L·每层 + 2·T·d·V", "", flops(r.F), "100%"]);
   $("eqFlops").innerHTML =
 `每层 = <b>4·T·d·d_q</b> + <b>4·T·d·d_kv</b> + <b>4·T²·d_q</b> + <b>${ff.n*2}·T·d·d_ff</b>
@@ -1250,10 +1314,10 @@ KV cache（推理，不是训练）= bytes · <b>2·L·B·T·d_kv</b>`;
   stack($("barAct"), $("legAct"), acts);
   tbl($("tAct"), ["激活项","符号","元素数","占激活"],
     [
-      ["打分矩阵 + softmax","2·B·h·T² × L",           int(L*r.a_score), pct(L*r.a_score/r.A)],
-      [`${ff.label} 中间量`,`${ff.gated?4:2}·B·T·d_ff × L`, int(L*r.a_ff), pct(L*r.a_ff/r.A)],
-      ["残差流侧 + Q/K/V","(4·B·T·d + 2·B·T·d_q + 2·B·T·d_kv) × L", int(L*r.a_stream), pct(L*r.a_stream/r.A)],
-      ["出口 norm/logits/CE","B·T·d + 2·B·T·V",       int(B*T*d+2*B*T*V), pct((B*T*d+2*B*T*V)/r.A)],
+      ["打分 + softmax","2·B·h·T² × L",           int(L*r.a_score), pct(L*r.a_score/r.A)],
+      [`${ff.label} 中间量`,`${ff.gated?4:2}·B·T·d_ff×L`, int(L*r.a_ff), pct(L*r.a_ff/r.A)],
+      ["流 + Q/K/V","(4·B·T·d + 2·B·T·d_q + 2·B·T·d_kv)×L", int(L*r.a_stream), pct(L*r.a_stream/r.A)],
+      ["出口 logits","B·T·d + 2·B·T·V",       int(B*T*d+2*B*T*V), pct((B*T*d+2*B*T*V)/r.A)],
     ],
     ["合计 A","", int(r.A), "100%"]);
   const perSample = r.memAct/Math.max(B,1);
@@ -1282,8 +1346,8 @@ KV cache（推理，不是训练）= bytes · <b>2·L·B·T·d_kv</b>`;
       + `fp8 <b>${N(gpu[1].fp8)}</b> TFLOP/s（点上面的按钮填的是 tf32）<br>`
       + `机器平衡点 = 峰值/带宽 = <b>${fmt(balance,0)}</b> FLOP/byte`
     : `峰值/带宽/显存可以随便改。机器平衡点 = 峰值/带宽 = <b>${fmt(balance,0)}</b> FLOP/byte`;
-  tbl($("tAI"), ["操作","AI = FLOPs/字节 的符号式","FLOPs","HBM 字节","AI (FLOP/byte)","判定"],
-    r.ai.map(a=>[a.k, a.sym+" ÷ bytes", flops(a.f), bytes(a.b), fmt(a.v,1),
+  tbl($("tAI"), ["操作","FLOPs/元素","FLOPs","HBM 字节","AI","判定"],
+    r.ai.map(a=>[a.k, a.sym, flops(a.f), bytes(a.b), fmt(a.v,1),
       a.v>balance?'<span class="tag ok">compute-bound</span>':'<span class="tag bad">memory-bound</span>']));
   $("aiDtype").innerHTML = `AI 随 dtype 变——同样的 FLOPs，搬的字节数不同。当前按 <b>${bpe} 字节/元素</b>算；`
     + `切到 ${bpe===4?"bf16（2 字节）搬运量减半、AI 翻倍":"fp32（4 字节）搬运量翻倍、AI 减半"}。`;
@@ -1367,11 +1431,11 @@ ${p.attn==="mha"&&dq===d&&ff.gated&&Math.abs(dff-8/3*d)<64 ? "  MHA + d_q=d + �
   const scaleRows = [0.5,1,2,4,8,16].map(m=>{
     const t = Math.round(T*m);
     const lin = L*(2*2*t*d*dq + 2*2*t*d*dkv + ff.n*2*t*d*dff) + 2*t*d*V, quad = L*4*t*t*dq;
-    return [ (m===1?`T = ${int(t)}（当前）`:`T = ${int(t)}`), `×${m}`,
+    return [ (m===1?`${int(t)} ←当前`:int(t)), `×${m}`,
              flops(lin+quad), pct(quad/(lin+quad)),
              fmt((lin+quad)/r.F,2)+"×" ];
   });
-  tbl($("tScale"), ["上下文","相对当前","一次 forward","打分占比","总量倍数"], scaleRows);
+  tbl($("tScale"), ["T","相对","一次 forward","打分占比","倍数"], scaleRows);
   $("scaleNote").innerHTML = `当前 d=${int(d)}，交叉点 <code>T* = ${int(r.Tstar)}</code>。`+
     ` 上下文超过它，注意力的平方项就压过整个模型的其余部分。`+
     ` 当前 T=${int(T)} ${T<r.Tstar?"<b>还在线性区</b>":"<b>已经进入平方区</b>"}。`;
