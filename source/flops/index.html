@@ -276,8 +276,8 @@
     <div class="field"><label>目标 token 数 <small>单位：十亿（B）</small></label><input id="Dtok" type="number" value="419.43" step="0.01"></div>
     <div class="presets" id="ratios" style="margin:-4px 0 10px"></div>
     <div class="field"><label>训练天数 <small>和 token 数联动</small></label><input id="days" type="number" value="202" step="0.1"></div>
-    <div class="field"><label>卡数 <small>GPU 张数</small></label><input id="ngpu" type="number" value="1" min="1"></div>
-    <div class="field"><label>梯度累积步数 <small>每步累几次</small></label><input id="accum" type="number" value="1024" min="1"></div>
+    <div class="field"><label>卡数 <small>GPU 张数</small></label><input id="ngpu" type="number" value="8" min="1"></div>
+    <div class="field"><label>梯度累积步数 <small>每步累几次</small></label><input id="accum" type="number" value="64" min="1"></div>
     <div class="derived" id="batchDer"></div>
     <div class="derived" id="tokDer"></div>
   </aside>
@@ -412,6 +412,9 @@ AdamW 一步 ≈ <b>14·P</b></div>
           <b>决定显存的是 B，不是 tB</b>——一次前向只处理 B 条序列，累积和数据并行都不增加同时驻留的激活。
           但 tB 通过这条链传导过来：<b>改 tB、卡数、累积步数中的任何一个，B 都会变，这一段的数就跟着变</b>。</p>
           <p class="note" id="fitNote"></p>
+          <p class="note">默认这组是一个能跑的配置：<b>8 张卡 × 累积 64 × 单卡 2 条</b> = 全局 1024。
+          想回到笔记 §5.4 那个「单卡、B=1」的口径，点左边的
+          <b>还原笔记口径</b>——那组算出来的 42.62 GB 是<b>一条序列</b>的账，不是一次真实训练步的账。</p>
           <p class="note" id="kvNote"></p>
           <p class="note" id="paramCheck"></p>
         </aside>
@@ -1522,7 +1525,7 @@ ${p.attn==="mha"&&dq===d&&ff.gated&&Math.abs(dff-8/3*d)<64 ? "  MHA + d_q=d + �
 $("presets").innerHTML = Object.keys(PRESETS).map(k=>`<button data-p="${k}">${k}</button>`).join("");
 $("gpus").innerHTML = Object.keys(GPUS).map(k=>`<button data-g="${k}">${k}</button>`).join("");
 $("ratios").innerHTML = [20,100,1000].map(k=>`<button data-r="${k}">${k}×P</button>`).join("")
-  + `<button data-r="0">笔记的 40 万步</button>`;
+  + `<button data-r="0">还原笔记口径（1 卡 · B=1）</button>`;
 $("ratios").addEventListener("click", e=>{
   const k = +e.target.dataset.r; if(!e.target.dataset.r) return;
   // 需要先知道当前的 P，所以借一次 compute
@@ -1530,7 +1533,13 @@ $("ratios").addEventListener("click", e=>{
   SEL.forEach(f => q[f] = $(f).value);
   const P = compute(q).P;
   timeDriver = "D";
-  $("Dtok").value = k ? +(k*P/1e9).toFixed(2) : +(400000*q.tB*q.T/1e9).toFixed(2);
+  if(k){
+    $("Dtok").value = +(k*P/1e9).toFixed(2);
+  }else{                                   // 还原笔记口径：单卡、B=1、40 万步
+    $("ngpu").value = 1;
+    $("accum").value = q.tB;               // 累积 = 全局 batch ⇒ B = 1
+    $("Dtok").value = +(400000*q.tB*q.T/1e9).toFixed(2);
+  }
   render();
 });
 $("gpus").addEventListener("click", e=>{
