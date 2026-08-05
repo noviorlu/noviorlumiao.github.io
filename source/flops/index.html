@@ -396,35 +396,44 @@ AdamW 一步 ≈ <b>14·P</b></div>
         <span class="ttl">显存：4P 是地板，激活值是天花板</span><span class="hd" id="hd2"></span></summary>
       <div class="body">
 
-      <h4 class="sub-h" style="border:0; padding-top:0; margin-top:0">参数量 —— 4P 的底座</h4>
       <div class="row2">
         <div>
           <div class="eq" id="eqParams"></div>
-          <div class="scroll"><table id="tParams"></table></div>
+          <div class="eq" id="eqMem"></div>
+          <div class="kpis" id="kMem"></div>
         </div>
         <aside class="c-side">
-          <p class="sidelab">两份 V·d</p>
-          <p class="note"><b>embedding 和 lm_head 各占一份 V·d</b>——本作业不做 weight tying，所以要算两次。
-          这两份在显存上一样重，在算力上完全不同（embedding 是查表，0 FLOPs）——差别见第 3 段。</p>
+          <p class="sidelab">显存的三笔账</p>
+          <p class="note"><b>常驻 4P</b>：参数、梯度、AdamW 的 m 和 v，各一份。<b>和 batch、T 都无关</b>，训练全程占着。</p>
+          <p class="note"><b>激活值 A</b>：前向算出来、反向求梯度时还要用的中间结果。只在前向到反向之间存在，
+          <b>和 B·T 成正比</b>（打分矩阵还是 T 的平方）。</p>
+          <p class="note"><b>KV cache</b>：只有推理有。训练一次算完整个序列，不需要缓存历史 K/V。</p>
+          <p class="note" id="kvNote"></p>
           <p class="note" id="paramCheck"></p>
         </aside>
       </div>
 
-      <h4 class="sub-h">训练时常驻的 4P，加上激活值</h4>
+      <h4 class="sub-h">同一份清单，参数和激活各占多少</h4>
       <div class="row2">
         <div>
-          <div class="eq" id="eqMem"></div>
-          <div class="kpis" id="kMem"></div>
+          <p class="note" style="margin:0 0 4px"><b>参数 P 的分布</b></p>
+          <div class="bar" id="barParamMem"></div>
+          <div class="legend" id="legParamMem"></div>
+          <p class="note" style="margin:16px 0 4px"><b>激活 A 的分布</b></p>
           <div class="bar" id="barAct"></div>
           <div class="legend" id="legAct"></div>
-          <div class="scroll" style="margin-top:14px"><table id="tAct"></table></div>
+          <div class="scroll" style="margin-top:16px"><table id="tMem"></table></div>
         </div>
         <aside class="c-side">
-          <p class="sidelab">地板与天花板</p>
-          <p class="note"><b>4P 是地板</b>：参数、梯度、AdamW 的 m 和 v，各一份，训练全程常驻，和 batch 无关。</p>
+          <p class="sidelab">一行 = 一个环节</p>
+          <p class="note">左半是<b>它的权重</b>（模型本身，存下来的），右半是<b>它跑一遍前向留下的中间结果</b>。
+          两列各自合到 100%。</p>
+          <p class="note">权重不随 batch、不随 T 变；中间结果随 <code>B·T</code> 变。
+          一个形状 <code>[in, out]</code> 的权重作用在 <code>B·T</code> 个 token 上，产出 <code>B·T·out</code> 个元素——
+          <b>比值就是 B·T / d</b>。</p>
+          <p class="note" id="ratioNote"></p>
+          <p class="sidelab" style="margin-top:14px">两边的零最值得看</p>
           <p class="note" id="actNote"></p>
-          <p class="sidelab" style="margin-top:14px">KV cache</p>
-          <p class="note" id="kvNote"></p>
         </aside>
       </div>
       </div>
@@ -644,12 +653,15 @@ function compute(p){
   // ── 激活值 ──
   // 残差流宽度的那些：2 个 norm + Q + ctx + o + block 输入 = 6·B·T·d
   // d_q = h·d_k（Q 与 ctx），d_kv = n_kv·d_k（K 与 V）
-  // 残差流宽度的四份（两个 norm、块入口、Wo 输出）+ Q 与 ctx（各 d_q）+ K 与 V（各 d_kv）
-  // MHA 且 d_q = d_kv = d 时合起来正好是 8·B·T·d
-  const a_stream = 4*B*T*d + 2*B*T*dq + 2*B*T*dkv;
-  const a_score  = 2*B*h*T*T;                 // 打分 + softmax，和 n_kv 无关
-  const a_ff     = (ff.gated?4:2)*B*T*dff;
-  const A = L*(a_stream + a_score + a_ff) + B*T*d + 2*B*T*V;
+  // 「激活值」在本页统一指：前向算出来、反向求梯度时还要用的中间结果。
+  // 不含权重、不含梯度、不含优化器状态。按来自哪一块拆开，别混在一行里。
+  const a_res   = 4*B*T*d;                    // 残差流上的：两个 norm 的输出 + 块入口 + Wo 输出
+  const a_qkv   = 2*B*T*dq + 2*B*T*dkv;       // 注意力的 Q、ctx（各 d_q）与 K、V（各 d_kv）
+  const a_score = 2*B*h*T*T;                  // 注意力的打分矩阵 + softmax，和 n_kv 无关
+  const a_ff    = (ff.gated?4:2)*B*T*dff;     // 前馈的中间量
+  const a_out   = B*T*d + 2*B*T*V;            // 出口：ln_f 输出、logits、cross-entropy
+  const a_stream = a_res + a_qkv;             // MHA 且 d_q=d_kv=d 时这两项合起来正好 8·B·T·d
+  const A = L*(a_res + a_qkv + a_score + a_ff) + a_out;
   const memFixed = bpe*4*P, memAct = bpe*A;
   const kvCache  = bpe*2*L*B*T*dkv;           // 推理时的 KV cache
 
@@ -666,7 +678,7 @@ function compute(p){
 
   return {P, emb, lmh, attn, ffnP, norms, p_q, p_k, p_v, p_o,
           F, perLayer, f_lm, f_q, f_kv, f_o, f_score, f_ctx, f_ff1,
-          blocks, A, a_stream, a_score, a_ff, memFixed, memAct, kvCache,
+          blocks, A, a_res, a_qkv, a_score, a_ff, a_out, a_stream, memFixed, memAct, kvCache,
           ai, Tstar, nkv, dk, dq, dkv, ff};
 }
 
@@ -1201,20 +1213,6 @@ function render(){
       ${dq===dkv&&dq===d ? "此处 d_q = d_kv = d，注意力那几项合起来就是 4d²"
         : `此处 d_kv 只有 d_q 的 ${fmt(dkv/dq,3)}${dq!==d?`，而 d_q 也不等于 d`:""}`}
       前馈：  ${ff.label} ${ff.n} 个 d×d_ff 矩阵`;
-  tbl($("tParams"),
-    ["组件","符号","参数量","显存","占比"],
-    [
-      ["token_embeddings","V·d",           int(r.emb),        bytes(bpe*r.emb),        pct(r.emb/r.P)],
-      ["q_proj","d·d_q × L",                  int(L*r.p_q),      bytes(bpe*L*r.p_q),      pct(L*r.p_q/r.P)],
-      ["k_proj + v_proj","2·d·d_kv × L",int(L*(r.p_k+r.p_v)),bytes(bpe*L*(r.p_k+r.p_v)),pct(L*(r.p_k+r.p_v)/r.P)],
-      ["output_proj","d_q·d × L",             int(L*r.p_o),      bytes(bpe*L*r.p_o),      pct(L*r.p_o/r.P)],
-      [`${ff.label} ×${ff.n}`,`${ff.n}·d·d_ff × L`, int(L*r.ffnP), bytes(bpe*L*r.ffnP), pct(L*r.ffnP/r.P)],
-      ["ln1/ln2","2·d × L",                int(L*r.norms),    bytes(bpe*L*r.norms),    pct(L*r.norms/r.P)],
-      ["ln_final","d",                     int(d),            bytes(bpe*d),            pct(d/r.P)],
-      ["lm_head","d·V",                    int(r.lmh),        bytes(bpe*r.lmh),        pct(r.lmh/r.P)],
-    ],
-    ["总计 P","", int(r.P), bytes(bpe*r.P), "100%"]);
-
   // ── 二、FLOPs ──
   const SH = {st:S(N(B),N(T),N(d)), q:S(N(B),N(h),N(T),N(dk)), kv:S(N(B),N(nkv),N(T),N(dk)),
               sc:S(N(B),N(h),N(T),N(T)), ff:S(N(B),N(T),N(dff)), lg:S(N(B),N(T),N(V))};
@@ -1285,47 +1283,53 @@ ${dq===dkv ? "  d_q = d_kv，前两项可以合并" : `  d_kv 只有 d_q 的 ${f
 
   // ── 五、显存 ──
   $("eqMem").innerHTML =
-`固定部分 = <b>4P</b>     参数(P) + 梯度(P) + AdamW 的 m、v(2P)
+`常驻 4P = <b>4·P</b>          参数 P + 梯度 P + AdamW 的 m、v 各 P。和 batch、T 都无关。
 
-每层激活 = <b>4·B·T·d</b> + <b>2·B·T·d_q</b> + <b>2·B·T·d_kv</b> + <b>2·B·h·T²</b> + <b>${ff.gated?4:2}·B·T·d_ff</b>
-           两norm+入口+Wo出口   Q 和 ctx      K 和 V         QKᵀ 和 softmax   ${ff.label} 的中间量
-           ${dq===dkv&&dq===d?"（此处 d_q = d_kv = d，前三项合并 = 8·B·T·d）":`（d_kv 只有 d_q 的 ${fmt(dkv/dq,3)}）`}
+激活值 A —— 前向算出来、反向还要用的中间结果，按来自哪一块拆开：
+  残差流上的        <b>4·B·T·d</b>            两个 norm 的输出 + 块入口 + Wo 输出
+  注意力 Q/K/V/ctx  <b>2·B·T·d_q + 2·B·T·d_kv</b>${dq===dkv&&dq===d?"      （此处 = 4·B·T·d，与上一项合起来就是 8·B·T·d）":""}
+  注意力 打分矩阵    <b>2·B·h·T²</b>           QKᵀ 和 softmax 各一份
+  前馈 中间量        <b>${ff.gated?4:2}·B·T·d_ff</b>          ${ff.label} 的中间张量
+  出口              <b>B·T·d + 2·B·T·V</b>    ln_f 输出、logits、cross-entropy
 
-A = L·(每层) + <b>B·T·d</b> + <b>2·B·T·V</b>      出口的 norm、logits、cross-entropy
-<b>Mem = bytes · (4P + A)</b>
-KV cache（推理，不是训练）= bytes · <b>2·L·B·T·d_kv</b>`;
+  A = L·(前四项) + 出口
+<b>训练显存 = bytes · (4P + A)</b>
+KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需要`;
   const total = r.memFixed + r.memAct;
   const vramB = p.vram*1e9;
   const maxB = Math.floor((vramB - r.memFixed) / (r.memAct/Math.max(B,1)));
   $("kMem").innerHTML = [
-    ["固定部分 4P","参数+梯度+m+v", bytes(r.memFixed)],
-    [`激活值（B=${int(B)}）`,"bytes·A", bytes(r.memAct)],
-    ["合计","bytes·(4P+A)", bytes(total)],
+    ["常驻 4P","参数+梯度+m+v，与 batch 无关", bytes(r.memFixed)],
+    [`激活值 A · 全部 ${N(L)} 层合计`,`B=${int(B)}，bytes·A`, bytes(r.memAct)],
+    ["训练显存 合计","bytes·(4P+A)", bytes(total)],
     [`${int(p.vram)} GB 能放的 batch`, maxB>0?"⌊(显存−4P)/每样本⌋":"装不下", maxB>0?int(maxB):"0"],
-    ["KV cache","2·L·B·T·d_kv", bytes(r.kvCache)],
+    ["KV cache（只有推理）","2·L·B·T·d_kv", bytes(r.kvCache)],
+    ["A / P","激活元素数 ÷ 参数量", fmt(r.A/r.P,0)+" ×"],
+    ["B·T / d","每个权重对应多少倍激活", fmt(B*T/d,1)+" ×"],
   ].map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v">${k[2]}</div><div class="s">${k[1]}</div></div>`).join("");
 
-  const acts = [
-    {k:"2·h·T²  打分+softmax", v:L*r.a_score},
-    {k:`${ff.gated?4:2}·T·d_ff  ${ff.label}`, v:L*r.a_ff},
-    {k:"4·T·d + 2·T·d_q + 2·T·d_kv  流/Q/K/V", v:L*r.a_stream},
-    {k:"出口 logits 等",        v:B*T*d + 2*B*T*V},
+  // 一行 = 一个环节：左半是它的权重，右半是它前向留下的中间结果。两列各自合到 100%。
+  const nff = ff.gated ? 4 : 2;
+  const memRows = [
+    ["token_embeddings", "V·d",              r.emb,            "—",                0],
+    ["q_proj",           "d·d_q ×L",         L*r.p_q,          "B·T·d_q ×L",       L*B*T*dq],
+    ["k_proj + v_proj",  "2·d·d_kv ×L",      L*(r.p_k+r.p_v),  "2·B·T·d_kv ×L",    L*2*B*T*dkv],
+    ["打分 QKᵀ+softmax",  "—",                0,                "2·B·h·T² ×L",      L*r.a_score],
+    ["scores@V → ctx",   "—",                0,                "B·T·d_q ×L",       L*B*T*dq],
+    ["output_proj",      "d_q·d ×L",         L*r.p_o,          "B·T·d ×L",         L*B*T*d],
+    [`${ff.label} ×${ff.n}`, `${ff.n}·d·d_ff ×L`, L*r.ffnP,    `${nff}·B·T·d_ff ×L`, L*r.a_ff],
+    ["ln1/ln2 的 γ",      "2·d ×L",           L*r.norms,        "2·B·T·d ×L",       L*2*B*T*d],
+    ["残差加（块入口）",   "—",                0,                "B·T·d ×L",         L*B*T*d],
+    ["ln_final 的 γ",     "d",                d,                "B·T·d",            B*T*d],
+    ["lm_head",          "d·V",              r.lmh,            "2·B·T·V",          2*B*T*V],
   ];
-  stack($("barAct"), $("legAct"), acts);
-  tbl($("tAct"), ["激活项","符号","元素数","占激活"],
-    [
-      ["打分 + softmax","2·B·h·T² × L",           int(L*r.a_score), pct(L*r.a_score/r.A)],
-      [`${ff.label} 中间量`,`${ff.gated?4:2}·B·T·d_ff×L`, int(L*r.a_ff), pct(L*r.a_ff/r.A)],
-      ["流 + Q/K/V","(4·B·T·d + 2·B·T·d_q + 2·B·T·d_kv)×L", int(L*r.a_stream), pct(L*r.a_stream/r.A)],
-      ["出口 logits","B·T·d + 2·B·T·V",       int(B*T*d+2*B*T*V), pct((B*T*d+2*B*T*V)/r.A)],
-    ],
-    ["合计 A","", int(r.A), "100%"]);
-  const perSample = r.memAct/Math.max(B,1);
-  $("actNote").innerHTML =
-    `单个 batch 元素的激活是 <b>${bytes(perSample)}</b>，权重是 ${bytes(bpe*r.P)}——`+
-    (perSample>bpe*r.P?"<b>激活比全部权重还多</b>。":"")+
-    ` 其中打分矩阵一项占 <b>${pct(L*r.a_score/r.A)}</b>，而它在 FLOPs 上只占 ${pct(r.blocks[2].v/r.F)}。`+
-    ` <b>算力上是配角，显存上是主角</b>——这正是 FlashAttention 不物化 [h,T,T] 的理由。`;
+  stack($("barParamMem"), $("legParamMem"), memRows.filter(x=>x[2]).map(x=>({k:x[0], v:x[2]})));
+  stack($("barAct"),      $("legAct"),      memRows.filter(x=>x[4]).map(x=>({k:x[0], v:x[4]})));
+  tbl($("tMem"), ["环节","参数 符号","参数量","占 P","激活 符号","激活元素数","占 A"],
+    memRows.map(x=>[x[0], x[1], x[2]?int(x[2]):"0", x[2]?pct(x[2]/r.P):"—",
+                          x[3], x[4]?int(x[4]):"0", x[4]?pct(x[4]/r.A):"—"]),
+    ["合计","", int(r.P), "100%", "", int(r.A), "100%"]);
+
   const kvMHA = bpe*2*L*B*T*dq;
   $("kvNote").innerHTML =
     `<b>KV cache 是推理时的账，训练时没有</b>——训练一次算完整个序列，不需要缓存历史 K/V。`
