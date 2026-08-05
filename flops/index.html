@@ -297,18 +297,12 @@
         接完宽度正好回到 <code>h·d_k = d_q</code>，才能喂给 W_o。<br>
         每摞下面那条细横杠也是<b>这些头拼接后有多宽</b>：Q 拼起来是 d_q，
         而 <b>GQA 下 K、V 的横杠只有 Q 的 n_kv/h</b>——省下的就是 KV cache。
-        右上角的小坐标轴标了三个方向分别是什么维。</p>
+        右上角的小坐标轴标了三个方向分别是什么维。<br>
+        <b>绿色那条粗线是残差流本身</b>：从上一段的 ⊕ 一路接到下一个子层的入口，中途分出一条<b>捷径</b>
+        绕过整个子层直接落到 ⊕。捷径取的是<b>进 RMSNorm 之前的原始 x</b>——归一化只作用在子层内部那一支，
+        残差通路始终干净，这就是 pre-norm。橙色外框和它底下那条回边表示<b>这两个子层重复 L 次</b>。</p>
       <p class="note" id="archNote"></p>
 
-      <details class="sub">
-        <summary>▸ 逐算子明细（形状 / FLOPs / 占前向比例）</summary>
-        <div class="body">
-          <div class="scroll"><div class="arch" id="arch"></div></div>
-          <p class="note" style="font-size:12.5px">
-            末列的百分比是该算子占<b>一次前向总 FLOPs</b> 的真实比例（块内的已乘 L），
-            <b>把带数字的行全加起来正好 100%</b>；条长则是按全图最大项归一后的相对值。</p>
-        </div>
-      </details>
       </div>
     </details>
 
@@ -320,9 +314,8 @@
       <h4 class="sub-h" style="border:0; padding-top:0; margin-top:0">参数量 —— FLOPs 的底座</h4>
       <div class="eq" id="eqParams"></div>
       <div class="scroll"><table id="tParams"></table></div>
-      <p class="note"><b>embedding 和 lm_head 各占一份 V·d</b>——本作业不做 weight tying，所以 V·d 要算两次，
-      但 FLOPs 里只算一次（embedding 是查表，0 FLOPs）。这个不对称在小模型上很显眼：切到
-      <b>GPT-2 small</b> 预设，lm_head 一项独占 27% 的前向 FLOPs；到了 <b>XL</b> 只剩 4.7%。</p>
+      <p class="note"><b>embedding 和 lm_head 各占一份 V·d</b>——本作业不做 weight tying，所以 V·d 要算两次。
+      这两份的去向完全不同，下面「六大块」那节会看到。</p>
       <p class="note" id="paramCheck"></p>
 
       <h4 class="sub-h">一次 forward 的 FLOPs</h4>
@@ -330,8 +323,9 @@
 推论：x[T,d_in] @ W[d_in,d_out]  =  <b>2 · token数 · 参数量</b>     数完参数量就等于数完了 FLOPs</div>
       <div class="scroll"><table id="tFlops"></table></div>
       <div class="eq" id="eqFlops"></div>
-      <p class="note">整张表里只有 <code>Q@K^T</code> 和 <code>scores@V</code> 让 T 出现两次——<b>那是 T² 的唯一来源</b>。
-      这两项和 K/V 的头数<b>无关</b>：GQA 会把 K、V 复制回 h 份再算，所以省的是显存和搬运，不是这里的 FLOPs。</p>
+      <p class="note">整张表里只有 <code>Q@Kᵀ</code> 和 <code>scores@V</code> 让 T 出现两次——<b>那是 T² 的唯一来源</b>，
+      下面「上下文拉长」那节整节都在算它。<b>零 FLOPs 的行同样值得看</b>：归一化、RoPE、softmax、残差加、
+      拼头，全是逐元素或换布局，一次乘法都不做——所以「数完参数量就等于数完 FLOPs」只在带权重的那些行上成立。</p>
 
       <h4 class="sub-h">六大块：占参数 与 占 FLOPs 是两回事</h4>
       <p class="note" style="margin-bottom:4px"><b>占参数量</b></p>
@@ -351,7 +345,7 @@ AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开�
       <p class="note"><b>优化器的算力可以忽略</b>，它的代价全在显存上——见第 2 段。AdamW 贵在 2× 的状态，不贵在计算。</p>
 
       <h4 class="sub-h">上下文拉长，FLOPs 的结构会翻转</h4>
-      <p class="note">FLOPs 里只有注意力打分是 T 的平方项，其余都是线性。所以 T 一长，占比结构会翻转。</p>
+      <p class="note">上面那两个 T² 的项是线性项之外唯一随 T 变快的，所以 T 一长，占比结构会翻转。</p>
       <div class="eq" id="eqTstar"></div>
       <div class="scroll"><table id="tScale"></table></div>
       <p class="note" id="scaleNote"></p>
@@ -378,9 +372,11 @@ AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开�
       <summary><span class="arw">▸</span><span class="num">3</span>
         <span class="ttl">训练时间：token 预算 ↔ 天数，两头都能定</span><span class="hd" id="hd3"></span></summary>
       <div class="body">
-      <div class="eq">一步训练 = <b>3 × 前向FLOPs</b>　总算力 = 3·F·batch·steps，其中 steps = D/(batch·T)
+      <div class="eq">每个 token 的训练成本 = <b>3·F / T</b>        F 和 3× 见第 1 段，这里直接用
+总算力 = 每 token 成本 × <b>D</b>          D = 目标 token 数
 有效算力 = <b>峰值 × MFU × 卡数</b>
-<b>天数 = 总算力 / 有效算力</b>　　反过来：给定天数，能训的 token 数 = 天数·有效算力·T/(3·F)</div>
+
+<b>天数 = 总算力 / 有效算力</b>        反过来：<b>D = 天数 × 有效算力 × T / (3·F)</b></div>
       <p class="note" id="twoWay"></p>
       <div class="kpis" id="kTime"></div>
       <p class="note" id="timeNote"></p>
@@ -1032,20 +1028,6 @@ function setupCanvas(){
   cv.closest("details").addEventListener("toggle", ()=>{ if(AV.pending) avFit(); });
 }
 
-// 明细表的一行
-function arows(items, F, mul=1, peak=1){
-  return items.map(it=>{
-    const f = it.f === undefined ? "" : (it.f === 0 ? "0" : flops(it.f));
-    const share = it.f ? it.f*mul/F : 0;
-    const bar = share
-      ? `<i style="width:${Math.min(100, share/peak*100).toFixed(2)}%"></i><b>${pct(share)}</b>`
-      : (it.f === 0 ? `<b>—</b>` : "");
-    return `<div class="arow ${it.cls||""}">`
-      + `<span class="nm">${it.n}</span><span class="sh">${it.s||""}</span>`
-      + `<span class="fl">${f}</span><span class="pb">${bar}</span></div>`;
-  }).join("");
-}
-
 // ═══════════════════════════════════════════════════════════
 function render(){
   const p = {};
@@ -1083,21 +1065,17 @@ function render(){
   if(nW !== AV.W || nH !== AV.H){ AV.W = nW; AV.H = nH; avFit(); }  // 换了模型 → 重新适应
   else avApply();                                                   // 只是改了个数 → 视角不动
   $("archNote").innerHTML =
-    `<b>残差流全程都是 ${xd}</b>——${N(L)} 层叠下来宽度一次没变。`
-    + ` pre-norm 的形状约束就这一条：每个子层只往残差流上<b>加</b>东西，自己内部怎么变宽变窄都行。`
-    + `<br>橙色的 <code>scores</code> ${S(N(B),N(h),N(T),N(T))} 是<b>整个前向里 T 唯一出现两次的地方</b>，`
-    + `${int(B*h*T*T)} 个元素，是残差流的 <b>${fmt(h*T/d,1)} 倍</b>（比值 = h·T/d）。`
-    + ` 它在 FLOPs 上只占 ${pct(r.blocks[2].v/r.F)}，在显存上却是第 2 段的大头。`
+      `图上这几个数会随配置变：残差流 <b>${xd}</b>，${N(L)} 层叠下来一次没变；`
+    + `橙色的 <code>scores</code> ${S(N(B),N(h),N(T),N(T))} 有 ${int(B*h*T*T)} 个元素，`
+    + `是残差流的 <b>${fmt(h*T/d,1)} 倍</b>（比值 = h·T/d）；`
+    + `出口 <code>logits</code> ${S(N(B),N(T),N(V))} 比残差流宽 <b>V/d = ${fmt(V/d,1)} 倍</b>，是全程最宽的张量。`
     + (p.attn !== "mha"
-        ? `<br><b>${ATTN[p.attn]} 在图上看得见</b>：K、V 的进深只有 ${N(nkv)}，而 Q 是 ${N(h)}——`
-          + `KV cache 因此小 ${fmt(d/dkv,2)}×。但 <code>scores</code> 那个盒子一点没变，`
-          + `因为 K 会被复制回 ${N(h)} 份再打分。<b>${ATTN[p.attn]} 省的是显存和搬运，不是 FLOPs。</b>`
-        : ``)
-    + `<br>出口 <code>logits</code> ${S(N(B),N(T),N(V))} 是全程最宽的张量，比残差流宽 <b>V/d = ${fmt(V/d,1)} 倍</b>，`
-    + ` 而它只经过一次矩阵乘就吃掉 ${pct(r.f_lm/r.F)} 的前向 FLOPs。`;
+        ? `<br><b>${ATTN[p.attn]} 在图上看得见</b>：K、V 的进深只有 ${N(nkv)}，Q 是 ${N(h)}，`
+          + `底下「拼接」横杠也短了 ${fmt(dq/dkv,2)}×——而 <code>scores</code> 那个盒子一点没变。`
+        : ``);
+
 
   // ── 逐算子明细 ──
-  const peak = Math.max(r.f_q, r.f_kv, r.f_o, r.f_score, r.f_ctx, r.f_ff1)*L/r.F;
   const dkS = N(dk);
   const ffRows = ff.gated ? [
       {n:"│  x @ W1   （门）", s:S(N(B),N(T),N(dff)), f:r.f_ff1},
@@ -1109,39 +1087,6 @@ function render(){
       {n:`│  ${ff.act}(·)`,   s:S(N(B),N(T),N(dff)), f:0, cls:"free"},
       {n:"└  @ W_out",       s:xd,                   f:r.f_ff1},
     ];
-  $("arch").innerHTML =
-    `<div class="ahead"><span>算子</span><span>输出形状</span><span>FLOPs</span><span>占前向</span></div>`
-    + arows([
-      {n:"输入 token ids",                s:S(N(B),N(T)), f:0, cls:"free"},
-      {n:"token_embeddings   weight[x]", s:xd,           f:0, cls:"free"},
-      {n:"残差流 x   ← 往下宽度恒为 d",     s:xd,                cls:"res"},
-    ], r.F, 1, peak)
-    + `<div style="border:1px dashed var(--accent); border-radius:8px; padding:10px 6px 6px; margin:10px 0">`
-    + `<div style="font:11px var(--mono); color:var(--accent); font-weight:700; padding:0 8px 4px">`
-    + `× L = ${N(L)} 层（FLOPs 列是单层，进度条已 ×L）</div>`
-    + arows([
-      {n:"┌ RMSNorm ln1",             s:xd,                              f:0, cls:"free"},
-      {n:"│  x @ Wq",                 s:S(N(B),N(h),N(T),dkS),           f:r.f_q},
-      {n:"│  x @ Wk",                 s:S(N(B),N(nkv),N(T),dkS),         f:r.f_kv},
-      {n:"│  x @ Wv",                 s:S(N(B),N(nkv),N(T),dkS),         f:r.f_kv},
-      {n:"│  RoPE(Q), RoPE(K)",       s:S(N(B),"·",N(T),dkS),            f:0, cls:"free"},
-      {n:"│  Q @ Kᵀ / √d_k",          s:S(N(B),N(h),N(T),N(T)),          f:r.f_score, cls:"hot"},
-      {n:"│  masked_fill,  softmax",  s:S(N(B),N(h),N(T),N(T)),          f:0, cls:"free"},
-      {n:"│  scores @ V",             s:S(N(B),N(h),N(T),dkS),           f:r.f_ctx, cls:"hot"},
-      {n:"│  合并头  rearrange",       s:xd,                              f:0, cls:"free"},
-      {n:"└  @ Wo",                   s:xd,                              f:r.f_o},
-      {n:"x = x + attn",              s:xd,                              f:0, cls:"res"},
-      {n:"┌ RMSNorm ln2",             s:xd,                              f:0, cls:"free"},
-      ...ffRows,
-      {n:"x = x + ffn",               s:xd,                              f:0, cls:"res"},
-    ], r.F, L, peak)
-    + `</div>`
-    + arows([
-      {n:"RMSNorm ln_final",           s:xd,                 f:0, cls:"free"},
-      {n:"@ lm_head   ← 全程最宽的张量", s:S(N(B),N(T),N(V)),  f:r.f_lm},
-      {n:"softmax / cross-entropy",    s:S(N(B),N(T),N(V)),  f:0, cls:"free"},
-    ], r.F, 1, peak);
-
   // ── 一、参数量 ──
   $("eqParams").innerHTML =
 `P = <b>2·V·d</b> + L·(<b>2·d·d_q + 2·d·d_kv</b> + <b>${ff.n}·d·d_ff</b> + <b>2·d</b>) + <b>d</b>
@@ -1165,22 +1110,38 @@ function render(){
     ["总计 P","", int(r.P), bytes(bpe*r.P), "100%"]);
 
   // ── 二、FLOPs ──
-  const fRows = [
-    ["MHA · x@Wq","2·T·d·d_q",           r.f_q],
-    ["MHA · x@Wk","2·T·d·d_kv",          r.f_kv],
-    ["MHA · x@Wv","2·T·d·d_kv",          r.f_kv],
-    ["MHA · Q@Kᵀ","2·T²·d_q",            r.f_score],
-    ["MHA · scores@V","2·T²·d_q",        r.f_ctx],
-    ["MHA · @Wo","2·T·d_q·d",            r.f_o],
+  const SH = {st:S(N(B),N(T),N(d)), q:S(N(B),N(h),N(T),N(dk)), kv:S(N(B),N(nkv),N(T),N(dk)),
+              sc:S(N(B),N(h),N(T),N(T)), ff:S(N(B),N(T),N(dff)), lg:S(N(B),N(T),N(V))};
+  // 每层的算子。第 4 列是单次 FLOPs，占比统一按 ×L 算。零 FLOPs 的也列出来，
+  // 因为"哪些步骤不花算力"和"哪些花"一样重要。
+  const layerOps = [
+    ["RMSNorm ln1 ×γ₁",  "逐元素",        SH.st, 0],
+    ["x @ Wq",           "2·T·d·d_q",     SH.q,  r.f_q],
+    ["x @ Wk",           "2·T·d·d_kv",    SH.kv, r.f_kv],
+    ["x @ Wv",           "2·T·d·d_kv",    SH.kv, r.f_kv],
+    ["RoPE(Q), RoPE(K)", "逐元素",        "—",   0],
+    ["Q @ Kᵀ / √d_k",    "2·T²·d_q",      SH.sc, r.f_score],
+    ["mask + softmax",   "逐元素",        SH.sc, 0],
+    ["scores @ V",       "2·T²·d_q",      SH.q,  r.f_ctx],
+    ["拼头 rearrange",    "只换布局",      SH.st, 0],
+    ["@ Wo",             "2·T·d_q·d",     SH.st, r.f_o],
+    ["x = x + attn",     "逐元素",        SH.st, 0],
+    ["RMSNorm ln2 ×γ₂",  "逐元素",        SH.st, 0],
   ].concat(ff.gated
-    ? [["FFN · x@W1","2·T·d·d_ff",r.f_ff1],["FFN · x@W3","2·T·d·d_ff",r.f_ff1],["FFN · @W2","2·T·d·d_ff",r.f_ff1]]
-    : [["FFN · x@W_in","2·T·d·d_ff",r.f_ff1],["FFN · @W_out","2·T·d·d_ff",r.f_ff1]]
-  ).map(x=>[x[0],x[1],flops(x[2]),pct(x[2]*L/r.F)]);
-  fRows.push(["每层小计", `2T(2·d·d_q+2·d·d_kv) + 4T²·d_q + ${ff.n}·2T·d·d_ff`, flops(r.perLayer), pct(L*r.perLayer/r.F)]);
-  fRows.push(["出口 · x@lm_head","2·T·d·V", flops(r.f_lm), pct(r.f_lm/r.F)]);
-  fRows.push(["token_embeddings","查表 gather", "0", "0%"]);
-  tbl($("tFlops"), ["在哪","符号 FLOPs","单次","×L 后占总量"], fRows,
-      ["一次 forward 总计","L·每层 + 2·T·d·V", flops(r.F), "100%"]);
+    ? [["x @ W1（门）","2·T·d·d_ff",SH.ff,r.f_ff1], ["x @ W3（值）","2·T·d·d_ff",SH.ff,r.f_ff1],
+       [`${ff.act}(门) ⊙ 值`,"逐元素",SH.ff,0],     ["@ W2","2·T·d·d_ff",SH.st,r.f_ff1]]
+    : [["x @ W_in","2·T·d·d_ff",SH.ff,r.f_ff1], [`${ff.act}(·)`,"逐元素",SH.ff,0],
+       ["@ W_out","2·T·d·d_ff",SH.st,r.f_ff1]]
+  ).concat([["x = x + ffn", "逐元素", SH.st, 0]]);
+  const fRows = layerOps.map(x=>[x[0],x[1],x[2], x[3]?flops(x[3]):"0", x[3]?pct(x[3]*L/r.F):"—"]);
+  fRows.push(["每层小计", `2T(2·d·d_q+2·d·d_kv) + 4T²·d_q + ${ff.n}·2T·d·d_ff`, SH.st,
+              flops(r.perLayer), pct(L*r.perLayer/r.F)]);
+  fRows.push(["token_embeddings", "查表 gather", SH.st, "0", "—"]);
+  fRows.push(["RMSNorm ln_final ×γ", "逐元素", SH.st, "0", "—"]);
+  fRows.push(["x @ lm_head", "2·T·d·V", SH.lg, flops(r.f_lm), pct(r.f_lm/r.F)]);
+  fRows.push(["softmax / cross-entropy", "逐元素", SH.lg, "0", "—"]);
+  tbl($("tFlops"), ["算子","符号 FLOPs","输出形状","单次","×L 后占前向"], fRows,
+      ["一次 forward 总计","L·每层 + 2·T·d·V", "", flops(r.F), "100%"]);
   $("eqFlops").innerHTML =
 `每层 = <b>4·T·d·d_q</b> + <b>4·T·d·d_kv</b> + <b>4·T²·d_q</b> + <b>${ff.n*2}·T·d·d_ff</b>
 ${dq===dkv ? "  d_q = d_kv，前两项可以合并" : `  d_kv 只有 d_q 的 ${fmt(dkv/dq,3)}，第二项按比例缩小`}
@@ -1200,9 +1161,11 @@ ${dq===dkv ? "  d_q = d_kv，前两项可以合并" : `  d_kv 只有 d_q 的 ${f
       `FLOPs 上最贵的是 <b>${big.k}（${pct(big.v/r.F)}）</b>，参数上最贵的是 <b>${bigP.k}（${pct(bigP.pv/r.P)}）</b>`
     + (big.k===bigP.k ? "——这次是同一块。" : "——<b>不是同一块</b>。")
     + `<br><b>两端各有一个极端</b>：<code>token_embeddings</code> 占 ${pct(r.blocks[0].pv/r.P)} 的参数却是 `
-    + `<b>0 FLOPs</b>（查表不算乘法）；<code>Attention 打分</code> 占 ${pct(sc.v/r.F)} 的 FLOPs 却是 `
-    + `<b>0 参数</b>（激活×激活，没有权重）。所以"数完参数量就等于数完 FLOPs"这句话，`
-    + `<b>只对那些真的有权重的矩阵乘成立</b>。`
+    + `<b>0 FLOPs</b>（查表）；<code>Attention 打分</code> 占 ${pct(sc.v/r.F)} 的 FLOPs 却是 `
+    + `<b>0 参数</b>（激活×激活，没有权重）。`
+    + `<br>同样一份 V·d，<code>lm_head</code> 那份要真做矩阵乘，<code>token_embeddings</code> 那份不用——`
+    + `所以词表在小模型上是算力负担、在大模型上只是显存负担：切到 <b>GPT-2 small</b>，`
+    + `lm_head 独占 27% 的前向 FLOPs；到了 <b>XL</b> 只剩 4.7%。`
     + `<br>打分与投影的比值是 <code>T·d_q / (d·(d_q+d_kv)) = ${fmt(T*dq/(d*(dq+dkv)),3)}</code>——<b>层数完全约掉了</b>。`;
 
   // ── 四、训练一步 ──
