@@ -266,7 +266,6 @@
     <h2 style="margin-top:22px">硬件</h2>
     <div class="presets" id="gpus"></div>
     <div class="derived" id="gpuDer"></div>
-    <div class="field"><label>batch_size <small>B</small></label><input id="B" type="number" value="1"></div>
     <div class="field"><label>每个数几字节 <small>bytes</small></label>
       <select id="bpe"><option value="4">fp32 · 4</option><option value="2">bf16/fp16 · 2</option></select></div>
     <div class="field"><label>显存 <small>GB</small></label><input id="vram" type="number" value="80"></div>
@@ -278,9 +277,9 @@
     <div class="presets" id="ratios" style="margin:-4px 0 10px"></div>
     <div class="field"><label>训练天数 <small>和 token 数联动</small></label><input id="days" type="number" value="202" step="0.1"></div>
     <div class="field"><label>卡数 <small>GPU 张数</small></label><input id="ngpu" type="number" value="1" min="1"></div>
+    <div class="field"><label>梯度累积步数 <small>每步累几次</small></label><input id="accum" type="number" value="1024" min="1"></div>
+    <div class="derived" id="batchDer"></div>
     <div class="derived" id="tokDer"></div>
-    <p class="note" style="font-size:12px; margin:6px 0 0">上面的 <code>B</code> 是<b>单卡</b>放得下的 batch（第 2 段用），
-    这里的是<b>全局</b> batch（第 3 段用）。两者相差的倍数就是梯度累积 × 数据并行。</p>
   </aside>
 
   <!-- ── 输出 ── -->
@@ -408,6 +407,11 @@ AdamW 一步 ≈ <b>14·P</b></div>
           <p class="note"><b>激活值 A</b>：前向算出来、反向求梯度时还要用的中间结果。只在前向到反向之间存在，
           <b>和 B·T 成正比</b>（打分矩阵还是 T 的平方）。</p>
           <p class="note"><b>KV cache</b>：只有推理有。训练一次算完整个序列，不需要缓存历史 K/V。</p>
+          <p class="sidelab" style="margin-top:14px">全局 batch 怎么进到这里</p>
+          <p class="note"><code>全局 batch tB = 单卡 micro-batch B × 梯度累积步数 × 卡数</code>。
+          <b>决定显存的是 B，不是 tB</b>——一次前向只处理 B 条序列，累积和数据并行都不增加同时驻留的激活。
+          但 tB 通过这条链传导过来：<b>改 tB、卡数、累积步数中的任何一个，B 都会变，这一段的数就跟着变</b>。</p>
+          <p class="note" id="fitNote"></p>
           <p class="note" id="kvNote"></p>
           <p class="note" id="paramCheck"></p>
         </aside>
@@ -422,12 +426,18 @@ AdamW 一步 ≈ <b>14·P</b></div>
           <p class="note" style="margin:16px 0 4px"><b>激活 A 的分布</b></p>
           <div class="bar" id="barAct"></div>
           <div class="legend" id="legAct"></div>
+          <p class="note" style="margin:16px 0 4px"><b>真正吃掉的显存：4×参数 + 激活</b></p>
+          <div class="bar" id="barMemAll"></div>
+          <div class="legend" id="legMemAll"></div>
           <div class="scroll" style="margin-top:16px"><table id="tMem"></table></div>
         </div>
         <aside class="c-side">
           <p class="sidelab">一行 = 一个环节</p>
-          <p class="note">左半是<b>它的权重</b>（模型本身，存下来的），右半是<b>它跑一遍前向留下的中间结果</b>。
-          两列各自合到 100%。</p>
+          <p class="note">一行三个口径：<b>参数量</b>（模型本身）、<b>激活元素数</b>（前向留下的中间结果），
+          以及<b>这行真正吃掉的显存</b>。三列各自合到 100%。</p>
+          <p class="note">最后一列才是能直接横向比的：<code>显存 = bytes·(4×参数 + 激活)</code>——
+          <b>参数按 4 份算</b>（自己 + 梯度 + AdamW 的 m 和 v），<b>激活按 1 份</b>。
+          同样 1 个元素，<b>权重比激活贵 4 倍</b>。</p>
           <p class="note">权重不随 batch、不随 T 变；中间结果随 <code>B·T</code> 变。
           一个形状 <code>[in, out]</code> 的权重作用在 <code>B·T</code> 个 token 上，产出 <code>B·T·out</code> 个元素——
           <b>比值就是 B·T / d</b>。</p>
@@ -512,7 +522,7 @@ AI &gt; 平衡点 → compute-bound        AI &lt; 平衡点 → memory-bound</d
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const IN = ["V","T","L","d","h","nkv","dk","dff","B","bpe","vram","peak","bw","mfu","tB","Dtok","days","ngpu"];
+const IN = ["V","T","L","d","h","nkv","dk","dff","bpe","vram","peak","bw","mfu","tB","Dtok","days","ngpu","accum"];
 const SEL = ["attn","ffn"];
 
 // 预设：形状 + 变体。参数量已对着公开数字核过，见第 1 段末尾那行自检。
@@ -1154,6 +1164,12 @@ function render(){
   const ffm = FFN[p.ffn];
   if($("autoff").checked){ p.dff = Math.round((ffm.gated?8/3:4)*p.d/64)*64; $("dff").value = p.dff; }
   if($("autodk").checked){ p.dk = Math.max(1, Math.round(p.d/Math.max(1,p.h))); $("dk").value = p.dk; }
+  // 全局 batch = 单卡 micro-batch × 梯度累积步数 × 卡数。
+  // B 是被推出来的那一个，所以改 tB / 卡数 / 累积步数都会传导到显存。
+  const nGPU  = Math.max(1, Math.round(p.ngpu));
+  const accum = Math.max(1, Math.round(p.accum));
+  const Braw  = p.tB / (accum * nGPU);
+  p.B = Math.max(1, Math.round(Braw));
   const {V,T,L,d,h,dff,B,bpe} = p;
   const r = compute(p);
   const {nkv, dk, dq, dkv, ff} = r;
@@ -1302,11 +1318,31 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
     ["常驻 4P","参数+梯度+m+v，与 batch 无关", bytes(r.memFixed)],
     [`激活值 A · 全部 ${N(L)} 层合计`,`B=${int(B)}，bytes·A`, bytes(r.memAct)],
     ["训练显存 合计","bytes·(4P+A)", bytes(total)],
-    [`${int(p.vram)} GB 能放的 batch`, maxB>0?"⌊(显存−4P)/每样本⌋":"装不下", maxB>0?int(maxB):"0"],
+    [`这张卡最多放的 B`, maxB>0?"⌊(显存−4P)/每样本⌋":"装不下", maxB>0?int(maxB):"0"],
+    ["当前 B","tB/(累积×卡数)", int(B)],
+    ["放得下最少要累积", "⌈tB/(maxB×卡数)⌉", maxB>0?int(Math.ceil(p.tB/(maxB*nGPU))):"—"],
     ["KV cache（只有推理）","2·L·B·T·d_kv", bytes(r.kvCache)],
     ["A / P","激活元素数 ÷ 参数量", fmt(r.A/r.P,0)+" ×"],
     ["B·T / d","每个权重对应多少倍激活", fmt(B*T/d,1)+" ×"],
   ].map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v">${k[2]}</div><div class="s">${k[1]}</div></div>`).join("");
+
+  $("fitNote").innerHTML = maxB > 0
+    ? (B <= maxB
+        ? `当前 <b>B = ${int(B)}</b>，这张 ${int(p.vram)} GB 的卡最多放 <b>${int(maxB)}</b>——<b>放得下</b>。`
+        : `当前 <b>B = ${int(B)}</b> 超过这张卡的上限 <b>${int(maxB)}</b>，<span class="tag bad">装不下</span>`
+          + ` 把累积步数提到 <b>${int(Math.ceil(p.tB/(maxB*nGPU)))}</b> 以上，或者加卡。`)
+    : `<span class="tag bad">装不下</span> 光是常驻的 4P 就超了这张卡，连 B=1 都放不下，必须切分模型（张量并行 / ZeRO）。`;
+  $("ratioNote").innerHTML =
+      `当前 <code>B·T/d = ${int(B)}×${int(T)}/${int(d)} = ${fmt(B*T/d,1)}</code>，`
+    + `所以逐行的激活大约是对应参数的 ${fmt(B*T/d,1)} 倍。整体 <b>A / P = ${fmt(r.A/r.P,0)}×</b>——`
+    + (r.A/r.P > 30 ? `激活远远压过参数，省显存要从<b>激活</b>下手（重计算、FlashAttention），改模型形状没用。`
+                    : `两者还在同一量级；把 B 或 T 调大，激活会迅速拉开。`);
+  $("actNote").innerHTML =
+      `<code>打分矩阵</code> <b>在参数那半边根本不存在</b>——它是 Q@Kᵀ，激活×激活，没有权重；`
+    + `却占了激活的 <b>${pct(L*r.a_score/r.A)}</b>，而在 FLOPs 上只占 ${pct(r.blocks[2].v/r.F)}。`
+    + `<b>算力上是配角，显存上是主角</b>——这正是 FlashAttention 不物化 [h,T,T] 的理由。`
+    + `<br>反过来 <code>token_embeddings</code> 占 ${pct(r.blocks[0].pv/r.P)} 的参数，但<b>产出 0 激活</b>——`
+    + `它的输出就是残差流本身，已经算在「残差加（块入口）」那一行里了。`;
 
   // 一行 = 一个环节：左半是它的权重，右半是它前向留下的中间结果。两列各自合到 100%。
   const nff = ff.gated ? 4 : 2;
@@ -1323,12 +1359,18 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
     ["ln_final 的 γ",     "d",                d,                "B·T·d",            B*T*d],
     ["lm_head",          "d·V",              r.lmh,            "2·B·T·V",          2*B*T*V],
   ];
+  // 这一行真正吃掉多少显存：参数按 4 份算（自己 + 梯度 + m + v），激活按 1 份。
+  // 分母是 4P + A，所以这一列也正好合到 100%，而且是三个口径里唯一能直接横向比的。
+  const memOf = x => 4*x[2] + x[4], memTot = 4*r.P + r.A;
   stack($("barParamMem"), $("legParamMem"), memRows.filter(x=>x[2]).map(x=>({k:x[0], v:x[2]})));
   stack($("barAct"),      $("legAct"),      memRows.filter(x=>x[4]).map(x=>({k:x[0], v:x[4]})));
-  tbl($("tMem"), ["环节","参数 符号","参数量","占 P","激活 符号","激活元素数","占 A"],
+  stack($("barMemAll"),   $("legMemAll"),   memRows.filter(memOf).map(x=>({k:x[0], v:memOf(x)})));
+  tbl($("tMem"),
+    ["环节","参数 符号","参数量","占 P","激活 符号","激活元素数","占 A","这行的显存","占训练显存"],
     memRows.map(x=>[x[0], x[1], x[2]?int(x[2]):"0", x[2]?pct(x[2]/r.P):"—",
-                          x[3], x[4]?int(x[4]):"0", x[4]?pct(x[4]/r.A):"—"]),
-    ["合计","", int(r.P), "100%", "", int(r.A), "100%"]);
+                          x[3], x[4]?int(x[4]):"0", x[4]?pct(x[4]/r.A):"—",
+                          bytes(bpe*memOf(x)), pct(memOf(x)/memTot)]),
+    ["合计","", int(r.P), "100%", "", int(r.A), "100%", bytes(bpe*memTot), "100%"]);
 
   const kvMHA = bpe*2*L*B*T*dq;
   $("kvNote").innerHTML =
@@ -1363,7 +1405,6 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
     ` 解码时 T=1，投影的 AI 降到 <code>2d/((2+d)·bytes) ≈ ${fmt(decAI,2)}</code>，极度 memory-bound——这是自回归生成慢的根本原因。`;
 
   // ── 七、时间 ──
-  const nGPU   = Math.max(1, Math.round(p.ngpu));
   const eff    = p.peak*1e12*p.mfu*nGPU;             // 有效算力，FLOP/s
   const perTok = 3*r.F/T;                            // 训一个 token 要多少 FLOPs（含注意力的 T²）
   let D, sec;
@@ -1392,10 +1433,12 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
     ["耗时",`${nGPU} 张卡`, dur(sec)],
     ["每个 token","3·F/T", flops(perTok)],
   ].map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v">${k[2]}</div><div class="s">${k[1]}</div></div>`).join("");
-  $("timeNote").innerHTML = maxB>0
-    ? `全局 batch 是 <b>${int(p.tB)}</b>，而第 2 段算出单卡最多放 <b>${int(maxB)}</b>——`+
-      (p.tB>maxB?`相差 <b>${fmt(p.tB/maxB,0)} 倍</b>，`:"")+`这就是梯度累积和数据并行存在的理由。`
-    : `当前配置下单卡连 batch=1 都放不下，必须切分模型。`;
+  $("timeNote").innerHTML =
+      `全局 batch <b>${int(p.tB)}</b> = 单卡 <b>${int(B)}</b> × 累积 <b>${int(accum)}</b> × 卡数 <b>${int(nGPU)}</b>。`
+    + `<b>算总量只看 tB</b>——怎么拆不影响总 FLOPs，只影响单卡显存（第 2 段）和墙钟时间。`
+    + (maxB > 0 && B > maxB
+        ? `<br><span class="tag bad">注意</span> 当前拆法下单卡放不下，第 2 段那个数是算出来的、不是跑得动的。`
+        : ``);
 
   // ── token 预算：和参数量的比值 ──
   const Dtot = D, ratio = Dtot/r.P;
@@ -1403,6 +1446,13 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
                 : ratio < 40 ? ["ok","Chinchilla 附近（≈20× 是同等算力下 loss 最低的配比）"]
                 : ratio < 300 ? ["ok","过训——现在主流的做法，为了推理时更省"]
                 : ["ok","严重过训——Llama-3-8B 是 1875×，小模型灌大数据"];
+  $("batchDer").innerHTML =
+      `单卡 micro-batch <b>B = tB / (累积 × 卡数) = ${int(p.tB)} / (${int(accum)} × ${int(nGPU)}) = ${int(B)}</b><br>`
+    + `<span style="color:var(--muted)">B 决定显存里的激活值；tB 决定训练总量。改上面任一个都会传导过来。</span>`
+    + (Math.abs(Braw - B) > 1e-9
+        ? `<br><span class="tag bad">对不齐</span> ${fmt(Braw,3)} 不是整数，已按 ${int(B)} 算——`
+          + `说明累积步数或卡数设多了/少了`
+        : ``);
   $("tokDer").innerHTML =
       `D = <b>${cnt(Dtot)}</b> tokens　P = ${cnt(r.P)}<br>`
     + `<b>D / P = ${fmt(ratio,0)}×</b>　<span class="tag ${verdict[0]}">${verdict[1]}</span><br>`
