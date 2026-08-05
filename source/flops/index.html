@@ -120,6 +120,12 @@
   .eq b{color:var(--accent); font-weight:600}
   .note{font-size:13.5px; color:var(--muted); margin:10px 0}
   .note b{color:var(--ink)}
+  .tslide{position:relative; margin:10px 0 30px}
+  .tslide input[type=range]{width:100%; accent-color:var(--accent); cursor:ew-resize}
+  .tstar{position:absolute; top:26px; transform:translateX(-50%); font:10.5px var(--mono);
+    color:var(--warn); white-space:nowrap; font-weight:600}
+  .tstar::before{content:""; position:absolute; left:50%; top:-18px; width:2px; height:15px; background:var(--warn)}
+  .tends{display:flex; justify-content:space-between; font:10.5px var(--mono); color:var(--muted); margin-top:-4px}
   .sub-h{font-size:14px; margin:26px 0 8px; padding-top:14px; border-top:1px solid var(--line)}
 
   .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:14px 0}
@@ -311,14 +317,7 @@
         <span class="ttl">算力：一次前向、一步训练要多少 FLOPs</span><span class="hd" id="hd1"></span></summary>
       <div class="body">
 
-      <h4 class="sub-h" style="border:0; padding-top:0; margin-top:0">参数量 —— FLOPs 的底座</h4>
-      <div class="eq" id="eqParams"></div>
-      <div class="scroll"><table id="tParams"></table></div>
-      <p class="note"><b>embedding 和 lm_head 各占一份 V·d</b>——本作业不做 weight tying，所以 V·d 要算两次。
-      这两份的去向完全不同，下面「六大块」那节会看到。</p>
-      <p class="note" id="paramCheck"></p>
-
-      <h4 class="sub-h">一次 forward 的 FLOPs</h4>
+      <h4 class="sub-h" style="border:0; padding-top:0; margin-top:0">一次 forward 的 FLOPs</h4>
       <div class="eq">矩阵乘 A(m×n) @ B(n×p)  =  <b>2·m·n·p</b> FLOPs     每个输出元素 = 长度 n 的点积 = n 乘 + n 加
 推论：x[T,d_in] @ W[d_in,d_out]  =  <b>2 · token数 · 参数量</b>     数完参数量就等于数完了 FLOPs</div>
       <div class="scroll"><table id="tFlops"></table></div>
@@ -326,16 +325,6 @@
       <p class="note">整张表里只有 <code>Q@Kᵀ</code> 和 <code>scores@V</code> 让 T 出现两次——<b>那是 T² 的唯一来源</b>，
       下面「上下文拉长」那节整节都在算它。<b>零 FLOPs 的行同样值得看</b>：归一化、RoPE、softmax、残差加、
       拼头，全是逐元素或换布局，一次乘法都不做——所以「数完参数量就等于数完 FLOPs」只在带权重的那些行上成立。</p>
-
-      <h4 class="sub-h">六大块：占参数 与 占 FLOPs 是两回事</h4>
-      <p class="note" style="margin-bottom:4px"><b>占参数量</b></p>
-      <div class="bar" id="barParam"></div>
-      <div class="legend" id="legParam"></div>
-      <p class="note" style="margin:14px 0 4px"><b>占前向 FLOPs</b></p>
-      <div class="bar" id="barFlops"></div>
-      <div class="legend" id="legFlops"></div>
-      <div class="scroll" style="margin-top:14px"><table id="tBlocks"></table></div>
-      <p class="note" id="blockNote"></p>
 
       <h4 class="sub-h">从一次前向推到一步训练</h4>
       <div class="eq">反向 ≈ 2 × 前向     每个权重矩阵反向要算两次：对输入的梯度 + 对权重的梯度
@@ -345,7 +334,18 @@ AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开�
       <p class="note"><b>优化器的算力可以忽略</b>，它的代价全在显存上——见第 2 段。AdamW 贵在 2× 的状态，不贵在计算。</p>
 
       <h4 class="sub-h">上下文拉长，FLOPs 的结构会翻转</h4>
-      <p class="note">上面那两个 T² 的项是线性项之外唯一随 T 变快的，所以 T 一长，占比结构会翻转。</p>
+      <p class="note">上面那两个 T² 的项是线性项之外唯一随 T 变快的，所以 T 一长，占比结构会翻转。
+      <b>拖下面这根条</b>——它改的就是左边那个 <code>context_length</code>，整页都会跟着变。
+      橙色刻度是交叉点 <code>T*</code>：拖过它，平方项就压过模型的其余部分。</p>
+      <div class="tslide">
+        <input type="range" id="Tslide" min="0" max="1000" step="1" value="500"
+               aria-label="context_length">
+        <div class="tstar" id="tstarMark"></div>
+      </div>
+      <div class="tends"><span>64</span><span>1,048,576</span></div>
+      <div class="bar" id="barT"></div>
+      <div class="legend" id="legT"></div>
+      <div class="kpis" id="kT"></div>
       <div class="eq" id="eqTstar"></div>
       <div class="scroll"><table id="tScale"></table></div>
       <p class="note" id="scaleNote"></p>
@@ -356,6 +356,14 @@ AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开�
       <summary><span class="arw">▸</span><span class="num">2</span>
         <span class="ttl">显存：4P 是地板，激活值是天花板</span><span class="hd" id="hd2"></span></summary>
       <div class="body">
+      <h4 class="sub-h" style="border:0; padding-top:0; margin-top:0">参数量 —— 4P 的底座</h4>
+      <div class="eq" id="eqParams"></div>
+      <div class="scroll"><table id="tParams"></table></div>
+      <p class="note"><b>embedding 和 lm_head 各占一份 V·d</b>——本作业不做 weight tying，所以 V·d 要算两次。
+      这两份在显存上一样重，但在算力上完全不同（embedding 是查表，0 FLOPs）——差别见第 3 段。</p>
+      <p class="note" id="paramCheck"></p>
+
+      <h4 class="sub-h">训练时常驻的 4P</h4>
       <div class="eq" id="eqMem"></div>
       <div class="kpis" id="kMem"></div>
       <h4 class="sub-h">激活值都花在哪</h4>
@@ -370,7 +378,26 @@ AdamW 一步 ≈ <b>14·P</b>     逐元素：缩放、两次滑动平均、开�
 
     <details class="card">
       <summary><span class="arw">▸</span><span class="num">3</span>
-        <span class="ttl">训练时间：token 预算 ↔ 天数，两头都能定</span><span class="hd" id="hd3"></span></summary>
+        <span class="ttl">六大块：占参数 与 占 FLOPs 是两回事</span><span class="hd" id="hd3"></span></summary>
+      <div class="body">
+      <p class="note">前两段各自算了一遍：第 1 段给出前向 FLOPs 怎么分，第 2 段给出参数怎么分。
+      <b>把这两个分布并排放，才看得出它们根本不是一回事</b>——有的块只花显存不花算力，有的反过来。
+      这一段不引入任何新公式，只是把已有的两组数换个方式对齐。</p>
+      <p class="note" style="margin-bottom:4px"><b>占参数量</b></p>
+      <div class="bar" id="barParam"></div>
+      <div class="legend" id="legParam"></div>
+      <p class="note" style="margin:14px 0 4px"><b>占前向 FLOPs</b></p>
+      <div class="bar" id="barFlops"></div>
+      <div class="legend" id="legFlops"></div>
+      <div class="scroll" style="margin-top:14px"><table id="tBlocks"></table></div>
+      <p class="note" id="blockNote"></p>
+
+      </div>
+    </details>
+
+    <details class="card">
+      <summary><span class="arw">▸</span><span class="num">4</span>
+        <span class="ttl">训练时间：token 预算 ↔ 天数，两头都能定</span><span class="hd" id="hd4"></span></summary>
       <div class="body">
       <div class="eq">每个 token 的训练成本 = <b>3·F / T</b>        F 和 3× 见第 1 段，这里直接用
 总算力 = 每 token 成本 × <b>D</b>          D = 目标 token 数
@@ -1298,6 +1325,26 @@ KV cache（推理，不是训练）= bytes · <b>2·L·B·T·d_kv</b>`;
     + `<b>D / P = ${fmt(ratio,0)}×</b>　<span class="tag ${verdict[0]}">${verdict[1]}</span><br>`
     + `推出步数 = D/(batch·T) = <b>${int(steps)}</b>`;
 
+  // ── 上下文这根拖拽条：对数刻度，直接驱动全局 T ──
+  const SLO = 6, SHI = 20;                                  // 2^6 = 64 到 2^20 ≈ 1M
+  const sPos = t => Math.max(0, Math.min(1000,
+      Math.round((Math.log2(Math.max(64,t)) - SLO)/(SHI-SLO)*1000)));
+  if(+$("Tslide").value !== sPos(T)) $("Tslide").value = sPos(T);
+  const quad = L*4*T*T*dq, lin = r.F - quad;
+  stack($("barT"), $("legT"), [
+    {k:`线性项（投影 + ${ff.label} + lm_head）`, v:lin},
+    {k:"平方项（注意力打分 ∝ T²）",             v:quad},
+  ]);
+  const starPos = sPos(r.Tstar);
+  $("tstarMark").style.left = starPos/10 + "%";
+  $("tstarMark").textContent = `T* = ${int(r.Tstar)}`;
+  $("kT").innerHTML = [
+    ["当前 T","拖动条", int(T)],
+    ["平方项占比","4·L·T²·d_q / F", pct(quad/r.F)],
+    ["交叉点 T*","线性 = 平方", int(r.Tstar)],
+    ["一次 forward","", flops(r.F)],
+  ].map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v">${k[2]}</div><div class="s">${k[1]}</div></div>`).join("");
+
   // ── 八、上下文缩放 ──
   $("eqTstar").innerHTML =
 `交叉点（线性项 = 平方项）：<b>T* = d + d·d_kv/d_q + ${ff.n}/2·d·d_ff/d_q + V·d/(2L·d_q)</b>
@@ -1333,8 +1380,9 @@ ${p.attn==="mha"&&dq===d&&ff.gated&&Math.abs(dff-8/3*d)<64 ? "  MHA + d_q=d + �
   // ── 卡片收起时的一行结论 ──
   hd(0, `${N(L)}×${ATTN[p.attn]}+${ff.label} · 残差流 ${xd}`);
   hd(1, `${flops(r.F)} / 次前向 · ${flops(stepF)} / 步`);
-  hd(2, `${bytes(total)} / ${int(p.vram)} GB`, total > vramB);
-  hd(3, `${durShort(sec)} · ${nGPU} 卡 · ${fmt(ratio,0)}×P tokens`);
+  hd(2, `P=${cnt(r.P)} · ${bytes(total)} / ${int(p.vram)} GB`, total > vramB);
+  hd(3, `最贵：FLOPs ${big.k} ${pct(big.v/r.F)} · 参数 ${bigP.k} ${pct(bigP.pv/r.P)}`);
+  hd(4, `${durShort(sec)} · ${nGPU} 卡 · ${fmt(ratio,0)}×P tokens`);
 }
 
 // 初始化
@@ -1379,6 +1427,12 @@ $("attn").addEventListener("change", e=>{
 });
 $("autoff").addEventListener("change", render);
 $("autodk").addEventListener("change", render);
+// 拖拽条改的就是全局 context_length，不另设一个参数
+$("Tslide").addEventListener("input", e=>{
+  const t = Math.max(64, Math.round(Math.pow(2, 6 + (+e.target.value)/1000*14)/64)*64);
+  $("T").value = t;
+  render();
+});
 
 setupCanvas();
 const CARDS = [...document.querySelectorAll("details.card")];
