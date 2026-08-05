@@ -126,6 +126,14 @@
     color:var(--warn); white-space:nowrap; font-weight:600}
   .tstar::before{content:""; position:absolute; left:50%; top:-18px; width:2px; height:15px; background:var(--warn)}
   .tends{display:flex; justify-content:space-between; font:10.5px var(--mono); color:var(--muted); margin-top:-4px}
+  /* 表格里凡是百分比，都在格子里垫一条浅色的量条 */
+  .pcell{position:relative; display:block; width:100%; min-width:62px; height:19px;
+    background:var(--code); border-radius:3px; overflow:hidden}
+  /* 用半透明填充而不是硬边框：边框会正好切在数字上 */
+  .pcell i{position:absolute; left:0; top:0; bottom:0; background:var(--accent); opacity:.24}
+  .pcell b{position:relative; display:block; text-align:right; padding-right:6px;
+    font:11.5px/19px var(--mono); font-weight:500; color:var(--ink)}
+  tr.total .pcell i{opacity:.42}
   .sub-h{font-size:14px; margin:26px 0 8px; padding-top:14px; border-top:1px solid var(--line)}
 
   .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:14px 0}
@@ -505,10 +513,17 @@ function dur(s){ return s/3600<48 ? durShort(s) : durShort(s)+"（"+int(s/3600)+
 function hd(i, html, warn){
   const el = $("hd"+i); el.innerHTML = html; el.classList.toggle("warn", !!warn);
 }
+// 单元格里如果只是一个百分比，就换成"浅色量条 + 数字"，一眼能比长短
+function cell(c){
+  const m = /^(\d+(?:\.\d+)?)%$/.exec(String(c));
+  if(!m) return c;
+  return `<span class="pcell"><i style="width:${Math.min(100, +m[1]).toFixed(2)}%"></i><b>${c}</b></span>`;
+}
 function tbl(el, head, rows, totalRow){
+  const tds = r => r.map((c,i)=>`<td class="${i===1?'f':''}">${cell(c)}</td>`).join("");
   let H = "<thead><tr>" + head.map((c,i)=>`<th class="${i===1?'f':''}">${c}</th>`).join("") + "</tr></thead><tbody>";
-  H += rows.map(r=>"<tr>"+r.map((c,i)=>`<td class="${i===1?'f':''}">${c}</td>`).join("")+"</tr>").join("");
-  if(totalRow) H += "<tr class='total'>"+totalRow.map((c,i)=>`<td class="${i===1?'f':''}">${c}</td>`).join("")+"</tr>";
+  H += rows.map(r=>"<tr>"+tds(r)+"</tr>").join("");
+  if(totalRow) H += "<tr class='total'>"+tds(totalRow)+"</tr>";
   el.innerHTML = H + "</tbody>";
 }
 function stack(barEl, legEl, items){
