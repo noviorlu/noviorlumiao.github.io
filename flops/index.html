@@ -108,6 +108,14 @@
   th,td{padding:7px 10px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap}
   th:first-child,td:first-child{text-align:left}
   th{font-weight:600; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.03em}
+  tr.ghead th{font-size:11px; padding:4px 10px 3px; text-align:center; border-bottom:0;
+    letter-spacing:.04em; text-transform:none; font-weight:700}
+  .gP{background:rgba(96,170,132,.09)}
+  .gA{background:rgba(214,146,100,.09)}
+  .gM{background:rgba(132,120,180,.09)}
+  .gF{background:rgba(96,150,190,.09)}
+  tr.ghead th.gP{color:#4a9c74} tr.ghead th.gA{color:#c07a44}
+  tr.ghead th.gM{color:#8478b4} tr.ghead th.gF{color:#5a92be}
   tr.total td{font-weight:700; border-top:2px solid var(--line); border-bottom:none}
   td.f,th.f{font-family:var(--mono); font-size:12.5px; color:var(--muted); text-align:left}
   tbody tr:hover{background:var(--code)}
@@ -425,13 +433,13 @@ AdamW 一步 ≈ <b>14·P</b></div>
         <div>
           <p class="note" style="margin:0 0 4px"><b>参数 P 的分布</b></p>
           <div class="bar" id="barParamMem"></div>
-          <div class="legend" id="legParamMem"></div>
           <p class="note" style="margin:16px 0 4px"><b>激活 A 的分布</b></p>
           <div class="bar" id="barAct"></div>
-          <div class="legend" id="legAct"></div>
           <p class="note" style="margin:16px 0 4px"><b>真正吃掉的显存：4×参数 + 激活</b></p>
           <div class="bar" id="barMemAll"></div>
-          <div class="legend" id="legMemAll"></div>
+          <div class="legend" id="legRows" style="margin-top:10px"></div>
+          <p class="note" style="font-size:12px">三条用的是<b>同一套颜色</b>：一个颜色 = 一个环节，
+          可以横着追同一行在三个口径下的分量。某条里缺了某个颜色，说明那一行在那个口径下是 0。</p>
           <div class="scroll" style="margin-top:16px"><table id="tMem"></table></div>
         </div>
         <aside class="c-side">
@@ -564,6 +572,10 @@ const GPUS = {
   "B200":     {vram:192, bw:8.0,  tf32:1100, bf16:2250, fp8:4500, mem:"192 GB HBM3e"},
 };
 const COLORS = ["#3d7f5e","#5f9ea0","#c08552","#8a7aa8","#b0563f","#6b8fb5"];
+// 显存那张表的 11 个环节，一行一个固定色。三条 bar 共用，所以同一个颜色
+// 在哪条里都指同一行，可以横着追。
+const ROWC = ["#4a7c59","#5f9ea0","#c8792f","#8a6fae","#b0563f","#5b83b8",
+              "#7f9e3d","#a8548a","#3f7f8c","#96733f","#6f6fbf"];
 
 let timeDriver = "D";      // "D"=按 token 预算算天数；"days"=按天数反推 token 预算
 const fmt = (n,p=2) => n.toLocaleString("en-US",{minimumFractionDigits:p,maximumFractionDigits:p});
@@ -605,21 +617,32 @@ function cell(c){
   if(!m) return c;
   return `<span class="pcell"><i style="width:${Math.min(100, +m[1]).toFixed(2)}%"></i><b>${c}</b></span>`;
 }
-function tbl(el, head, rows, totalRow){
-  const tds = r => r.map((c,i)=>`<td class="${i===1?'f':''}">${cell(c)}</td>`).join("");
-  let H = "<thead><tr>" + head.map((c,i)=>`<th class="${i===1?'f':''}">${c}</th>`).join("") + "</tr></thead><tbody>";
+// groups: [[标题, 跨几列, 类名], ...]。有分组时，组的类名会带到该组的每一列，
+// 这样一眼能看出哪几列属于 P、哪几列属于 A。
+function tbl(el, head, rows, totalRow, groups){
+  const cls = [];
+  if(groups) groups.forEach(g=>{ for(let i=0;i<g[1];i++) cls.push(g[2]||""); });
+  const cn = i => [i===1?"f":"", cls[i]||""].filter(Boolean).join(" ");
+  const tds = r => r.map((c,i)=>`<td class="${cn(i)}">${cell(c)}</td>`).join("");
+  let H = "<thead>";
+  if(groups) H += "<tr class='ghead'>" + groups.map(g=>
+      `<th colspan="${g[1]}" class="${g[2]||''}">${g[0]}</th>`).join("") + "</tr>";
+  H += "<tr>" + head.map((c,i)=>`<th class="${cn(i)}">${c}</th>`).join("") + "</tr></thead><tbody>";
   H += rows.map(r=>"<tr>"+tds(r)+"</tr>").join("");
   if(totalRow) H += "<tr class='total'>"+tds(totalRow)+"</tr>";
   el.innerHTML = H + "</tbody>";
 }
+// items 里可以带 c 指定颜色。多条 bar 分解的是同一批东西时必须这么用——
+// 否则按位置取色会让同一个颜色在不同的 bar 里指向不同的行。
 function stack(barEl, legEl, items){
   const tot = items.reduce((a,b)=>a+b.v,0) || 1;
+  const col = (it,i) => it.c || COLORS[i%COLORS.length];
   barEl.innerHTML = items.map((it,i)=>{
     const w = it.v/tot*100;
-    return `<span style="width:${w}%;background:${COLORS[i%COLORS.length]}">${w>9?w.toFixed(1)+"%":""}</span>`;
+    return `<span style="width:${w}%;background:${col(it,i)}">${w>9?w.toFixed(1)+"%":""}</span>`;
   }).join("");
-  legEl.innerHTML = items.map((it,i)=>
-    `<span><i style="background:${COLORS[i%COLORS.length]}"></i>${it.k} ${(it.v/tot*100).toFixed(1)}%</span>`).join("");
+  if(legEl) legEl.innerHTML = items.map((it,i)=>
+    `<span><i style="background:${col(it,i)}"></i>${it.k} ${(it.v/tot*100).toFixed(1)}%</span>`).join("");
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1276,7 +1299,8 @@ ${dq===dkv ? "  d_q = d_kv，前两项可以合并" : `  d_kv 只有 d_q 的 ${f
   tbl($("tBlocks"), ["块","符号","参数量","占参数","FLOPs","占前向"],
       r.blocks.map(b=>[b.k, b.sym, b.pv?cnt(b.pv):"0", b.pv?pct(b.pv/r.P):"—",
                               b.v ?flops(b.v):"0",   b.v ?pct(b.v/r.F):"—"]),
-      ["合计","", cnt(r.P), "100%", flops(r.F), "100%"]);
+      ["合计","", cnt(r.P), "100%", flops(r.F), "100%"],
+      [["", 2], ["参数 P", 2, "gP"], ["前向 FLOPs F", 2, "gF"]]);
   const big  = r.blocks.reduce((a,b)=>b.v>a.v?b:a);
   const bigP = r.blocks.reduce((a,b)=>b.pv>a.pv?b:a);
   const sc   = r.blocks[2];
@@ -1365,15 +1389,20 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
   // 这一行真正吃掉多少显存：参数按 4 份算（自己 + 梯度 + m + v），激活按 1 份。
   // 分母是 4P + A，所以这一列也正好合到 100%，而且是三个口径里唯一能直接横向比的。
   const memOf = x => 4*x[2] + x[4], memTot = 4*r.P + r.A;
-  stack($("barParamMem"), $("legParamMem"), memRows.filter(x=>x[2]).map(x=>({k:x[0], v:x[2]})));
-  stack($("barAct"),      $("legAct"),      memRows.filter(x=>x[4]).map(x=>({k:x[0], v:x[4]})));
-  stack($("barMemAll"),   $("legMemAll"),   memRows.filter(memOf).map(x=>({k:x[0], v:memOf(x)})));
+  const paint = (col, filt) => memRows.map((x,i)=>({k:x[0], v:filt(x), c:ROWC[i%ROWC.length]}))
+                                      .filter(o=>o.v > 0);
+  stack($("barParamMem"), null, paint(2, x=>x[2]));
+  stack($("barAct"),      null, paint(4, x=>x[4]));
+  // 图例只画一次：三条 bar 用的是同一套颜色，画三遍是重复
+  stack($("barMemAll"), $("legRows"), paint(0, memOf));
   tbl($("tMem"),
     ["环节","参数 符号","参数量","占 P","激活 符号","激活元素数","占 A","这行的显存","占训练显存"],
     memRows.map(x=>[x[0], x[1], x[2]?int(x[2]):"0", x[2]?pct(x[2]/r.P):"—",
                           x[3], x[4]?int(x[4]):"0", x[4]?pct(x[4]/r.A):"—",
                           bytes(bpe*memOf(x)), pct(memOf(x)/memTot)]),
-    ["合计","", int(r.P), "100%", "", int(r.A), "100%", bytes(bpe*memTot), "100%"]);
+    ["合计","", int(r.P), "100%", "", int(r.A), "100%", bytes(bpe*memTot), "100%"],
+    [["", 1], ["参数 P —— 模型本身", 3, "gP"], ["激活 A —— 前向留下的中间结果", 3, "gA"],
+     ["显存 = bytes·(4P + A)", 2, "gM"]]);
 
   const kvMHA = bpe*2*L*B*T*dq;
   $("kvNote").innerHTML =
