@@ -412,8 +412,17 @@ AdamW 一步 ≈ <b>14·P</b></div>
         <aside class="c-side">
           <p class="sidelab">显存的三笔账</p>
           <p class="note"><b>常驻 4P</b>：参数、梯度、AdamW 的 m 和 v，各一份。<b>和 batch、T 都无关</b>，训练全程占着。</p>
-          <p class="note"><b>激活值 A</b>：前向算出来、反向求梯度时还要用的中间结果。只在前向到反向之间存在，
-          <b>和 B·T 成正比</b>（打分矩阵还是 T 的平方）。</p>
+          <p class="note"><b>激活值 A</b>：<b>前向过程中产生、且反向求梯度时还要用到、因此必须留在显存里的
+          每一个中间张量</b>。注意这个词在这里<b>和激活函数没关系</b>——矩阵乘的输出、softmax 的输出、
+          归一化的输出全算，<code>scores</code> 那个 [B,h,T,T] 也算，尽管它不过任何激活函数。</p>
+          <p class="note">为什么非留不可：对 <code>Y = X @ W</code>，<code>∂L/∂W = Xᵀ @ ∂L/∂Y</code>——
+          <b>算权重的梯度必须有当初喂进去的 X</b>。逐元素的同理：softmax 反向要它的<b>输出</b>，
+          SiLU 要<b>输入</b>，<code>a ⊙ b</code> 两个都要（这就是门控 FFN 要留 4 个中间量的原因）。</p>
+          <p class="note">生命周期只在前向到反向之间。但<b>反向要等整个前向跑完才开始</b>，
+          所以前向留下的东西会<b>同时</b>堆着——这才是它成为天花板的原因。
+          它<b>和 B·T 成正比</b>（打分矩阵还是 T 的平方），而参数一点不随 B、T 变。</p>
+          <p class="note">也正因为能重算，它是<b>唯一可以用算力换掉的那部分</b>：梯度重计算多花约 30% 算力
+          换掉大半激活；FlashAttention 干脆不物化 [B,h,T,T]。参数没法这么处理——它没地方重算出来。</p>
           <p class="note"><b>KV cache</b>：只有推理有。训练一次算完整个序列，不需要缓存历史 K/V。</p>
           <p class="sidelab" style="margin-top:14px">全局 batch 怎么进到这里</p>
           <p class="note"><code>全局 batch tB = 单卡 micro-batch B × 梯度累积步数 × 卡数</code>。
@@ -453,6 +462,9 @@ AdamW 一步 ≈ <b>14·P</b></div>
           一个形状 <code>[in, out]</code> 的权重作用在 <code>B·T</code> 个 token 上，产出 <code>B·T·out</code> 个元素——
           <b>比值就是 B·T / d</b>。</p>
           <p class="note" id="ratioNote"></p>
+          <p class="note"><b>归属口径</b>：表里把每个激活记在<b>产出它的那个算子</b>名下
+          （<code>q_proj</code> 那行记的是 <code>Q</code> 的大小）。而链式法则真正要留的是<b>该算子的输入</b>。
+          这两种归法<b>总量相同</b>——在一条链上，前一个的输出就是后一个的输入——只是行与行之间差一格。</p>
           <p class="sidelab" style="margin-top:14px">两边的零最值得看</p>
           <p class="note" id="actNote"></p>
         </aside>
