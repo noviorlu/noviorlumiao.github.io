@@ -100,8 +100,8 @@
   .field input:focus,.field select:focus{outline:2px solid var(--accent); outline-offset:-1px}
   .field.off{opacity:.4; pointer-events:none}
   .chk{display:flex; gap:7px; align-items:center; font-size:13px; margin:2px 0 12px; color:var(--muted)}
-  .derived{font:11.5px/1.5 var(--mono); color:var(--muted); background:var(--code);
-    border-radius:5px; padding:7px 9px; margin:-2px 0 12px}
+  .derived{font:11px/1.55 var(--mono); color:var(--muted); background:var(--code);
+    border-radius:5px; padding:5px 8px; margin:-2px 0 10px}
 
   table{width:100%; border-collapse:collapse; font-size:13.5px}
   .scroll{overflow-x:auto; -webkit-overflow-scrolling:touch}
@@ -279,8 +279,10 @@
     <div class="field"><label>显存 <small>GB</small></label><input id="vram" type="number" value="80"></div>
     <div class="field"><label>峰值算力 <small>TFLOP/s</small></label><input id="peak" type="number" value="495"></div>
     <div class="field"><label>显存带宽 <small>TB/s</small></label><input id="bw" type="number" value="3.35" step="0.01"></div>
-    <div class="field"><label>MFU <small>0–1</small></label><input id="mfu" type="number" value="0.5" step="0.05"></div>
-    <div class="field"><label>训练 batch <small>只用于第 3 段</small></label><input id="tB" type="number" value="1024"></div>
+    <div class="field"><label>MFU <small>0–1，和下面联动</small></label><input id="mfu" type="number" value="0.5" step="0.01"></div>
+    <div class="field"><label>实测 token/s <small>日志里那个数</small></label><input id="tps" type="number" value="0" step="1"></div>
+    <div class="derived" id="mfuDer"></div>
+    <div class="field"><label>训练 batch <small>只用于第 3 段（训练时间）</small></label><input id="tB" type="number" value="1024"></div>
     <div class="field"><label>目标 token 数 <small>单位：十亿（B）</small></label><input id="Dtok" type="number" value="419.43" step="0.01"></div>
     <div class="presets" id="ratios" style="margin:-4px 0 10px"></div>
     <div class="field"><label>训练天数 <small>和 token 数联动</small></label><input id="days" type="number" value="202" step="0.1"></div>
@@ -448,11 +450,11 @@ AdamW 一步 ≈ <b>14·P</b></div>
           <div class="bar" id="barParamMem"></div>
           <p class="note" style="margin:16px 0 4px"><b>saved tensors S 的分布</b></p>
           <div class="bar" id="barAct"></div>
-          <p class="note" style="margin:16px 0 4px"><b>真正吃掉的显存：4×参数 + saved</b></p>
-          <div class="bar" id="barMemAll"></div>
-          <div class="legend" id="legRows" style="margin-top:10px"></div>
-          <p class="note" style="font-size:12px">三条用的是<b>同一套颜色</b>：一个颜色 = 一个环节，
-          可以横着追同一行在三个口径下的分量。某条里缺了某个颜色，说明那一行在那个口径下是 0。</p>
+          <div class="legend" id="legRows" style="margin-top:12px"></div>
+          <p class="note" style="font-size:12px">两条用的是<b>同一套颜色</b>：一个颜色 = 一个环节，
+          可以横着追同一行在两个口径下的分量。某条里缺了某个颜色，说明那一行在那个口径下是 0——
+          <code>打分</code> 在参数那条里没有，<code>token_embeddings</code> 在 saved 那条里没有。
+          精确数字看下面的表，第三个口径（占训练显存）只在表里给。</p>
           <div class="scroll" style="margin-top:16px"><table id="tMem"></table></div>
         </div>
         <aside class="c-side">
@@ -478,32 +480,7 @@ AdamW 一步 ≈ <b>14·P</b></div>
 
     <details class="card">
       <summary><span class="arw">▸</span><span class="num">3</span>
-        <span class="ttl">六大块：占参数 与 占 FLOPs 是两回事</span><span class="hd" id="hd3"></span></summary>
-      <div class="body">
-      <div class="row2">
-        <div>
-          <p class="note" style="margin:0 0 4px"><b>占参数量</b></p>
-          <div class="bar" id="barParam"></div>
-          <div class="legend" id="legParam"></div>
-          <p class="note" style="margin:16px 0 4px"><b>占前向 FLOPs</b></p>
-          <div class="bar" id="barFlops"></div>
-          <div class="legend" id="legFlops"></div>
-          <div class="scroll" style="margin-top:16px"><table id="tBlocks"></table></div>
-        </div>
-        <aside class="c-side">
-          <p class="sidelab">这一段在干什么</p>
-          <p class="note">前两段各算了一遍：第 1 段给出 FLOPs 怎么分，第 2 段给出参数怎么分。
-          <b>把两个分布并排，才看得出它们不是一回事</b>——有的块只花显存不花算力，有的反过来。
-          这里不引入新公式。</p>
-          <p class="note" id="blockNote"></p>
-        </aside>
-      </div>
-      </div>
-    </details>
-
-    <details class="card">
-      <summary><span class="arw">▸</span><span class="num">4</span>
-        <span class="ttl">训练时间：token 预算 ↔ 天数，两头都能定</span><span class="hd" id="hd4"></span></summary>
+        <span class="ttl">训练时间：token 预算 ↔ 天数，两头都能定</span><span class="hd" id="hd3"></span></summary>
       <div class="body">
       <div class="row2">
         <div>
@@ -517,6 +494,13 @@ AdamW 一步 ≈ <b>14·P</b></div>
           <p class="sidelab">两头都能定</p>
           <p class="note" id="twoWay"></p>
           <p class="note" id="timeNote"></p>
+          <p class="sidelab" style="margin-top:14px">MFU 怎么来的</p>
+          <p class="note"><b>MFU = 实际用掉的算力 ÷ 峰值算力</b>。把日志里的 token/s 填进左边，
+          这里就反推出 MFU；反过来填 MFU 也能推出理论上该跑多少 token/s。</p>
+          <p class="note">换算的桥是<b>每个 token 要多少 FLOPs</b>。业界常用 <code>6·P</code>：
+          前向 2P（每个参数一乘一加）+ 反向 4P（对输入的梯度 2P、对权重的梯度 2P）。
+          <b>本页用的是精确值 3·F/T</b>——<code>6P</code> 忽略了注意力那两项 T²，
+          又把 0 FLOPs 的 embedding 参数算了进去。两个数都列在左边，差多少一目了然。</p>
         </aside>
       </div>
 
@@ -549,7 +533,7 @@ AI &gt; 平衡点 → compute-bound        AI &lt; 平衡点 → memory-bound</d
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const IN = ["V","T","L","d","h","nkv","dk","dff","bpe","vram","peak","bw","mfu","tB","Dtok","days","ngpu","accum"];
+const IN = ["V","T","L","d","h","nkv","dk","dff","bpe","vram","peak","bw","mfu","tps","tB","Dtok","days","ngpu","accum"];
 const SEL = ["attn","ffn"];
 
 // 预设：形状 + 变体。参数量已对着公开数字核过，见第 1 段末尾那行自检。
@@ -593,7 +577,8 @@ const COLORS = ["#3d7f5e","#5f9ea0","#c08552","#8a7aa8","#b0563f","#6b8fb5"];
 const ROWC = ["#4a7c59","#5f9ea0","#c8792f","#8a6fae","#b0563f","#5b83b8",
               "#7f9e3d","#a8548a","#3f7f8c","#96733f","#6f6fbf"];
 
-let timeDriver = "D";      // "D"=按 token 预算算天数；"days"=按天数反推 token 预算
+let timeDriver = "D";   // token 预算 ↔ 天数，谁最后被改谁说了算
+let mfuDriver  = "mfu"; // MFU ↔ 实测 token/s，同理      // "D"=按 token 预算算天数；"days"=按天数反推 token 预算
 const fmt = (n,p=2) => n.toLocaleString("en-US",{minimumFractionDigits:p,maximumFractionDigits:p});
 const int = n => Math.round(n).toLocaleString("en-US");
 const N   = x => String(Math.round(x));
@@ -1226,13 +1211,9 @@ function render(){
     + ` ｜ 注意力 ${ATTN[p.attn]}（h=${N(h)}, n_kv=${N(nkv)}, d_k=${N(dk)}）`
     + ` ｜ 前馈 ${ff.label}（${ff.n} 矩阵, ${ff.act}）`;
   $("attnDer").innerHTML =
-      `d_q = h·d_k = ${N(h)}×${N(dk)} = <b>${N(dq)}</b>${dq!==d?`　<span class="tag bad">≠ d=${N(d)}</span>`:"　= d"}<br>`
-    + `d_kv = n_kv·d_k = ${N(nkv)}×${N(dk)} = <b>${N(dkv)}</b>　`
-    + `KV cache 是 MHA 的 <b>1/${fmt(dq/dkv,2)}</b><br>`
-    + (h % nkv ? `<span class="tag bad">h=${N(h)} 不能被 n_kv=${N(nkv)} 整除</span>——分组分不匀，真实模型不会这么配`
-              : `每 ${N(h/nkv)} 个查询头共享一组 K/V`)
-  $("ffnDer").innerHTML = `${ff.n} 个 d×d_ff 矩阵 → 每层 ${ff.n}·d·d_ff = <b>${cnt(r.ffnP)}</b> 参数<br>`
-    + `门控 8/3·d 与不门控 4·d 的 FLOPs 相同：3·(8/3) = 2·4 = 8`;
+      `d_q ${N(dq)}　d_kv ${N(dkv)}　KV 省 ${fmt(dq/dkv,2)}×`
+    + (h % nkv ? `　<span class="tag bad">h 除不尽 n_kv</span>` : ``);
+  $("ffnDer").innerHTML = `${ff.n} × d×d_ff = ${cnt(r.ffnP)} / 层`;
 
   // ── 几何架构图 ──
   $("archwrap").innerHTML = drawArch(p, r);
@@ -1308,27 +1289,9 @@ function render(){
 ${dq===dkv ? "  d_q = d_kv，前两项可以合并" : `  d_kv 只有 d_q 的 ${fmt(dkv/dq,3)}，第二项按比例缩小`}
 总计 = L·每层 + <b>2·T·d·V</b>（lm_head）`;
 
-  // ── 四大块：参数 与 FLOPs 两个口径 ──
-  stack($("barParam"), $("legParam"), r.blocks.map(b=>({k:b.k, v:b.pv})));
-  stack($("barFlops"), $("legFlops"), r.blocks.map(b=>({k:b.k, v:b.v})));
-  tbl($("tBlocks"), ["块","符号","参数量","占参数","FLOPs","占前向"],
-      r.blocks.map(b=>[b.k, b.sym, b.pv?cnt(b.pv):"0", b.pv?pct(b.pv/r.P):"—",
-                              b.v ?flops(b.v):"0",   b.v ?pct(b.v/r.F):"—"]),
-      ["合计","", cnt(r.P), "100%", flops(r.F), "100%"],
-      [["", 2], ["参数 P", 2, "gP"], ["前向 FLOPs F", 2, "gF"]]);
-  const big  = r.blocks.reduce((a,b)=>b.v>a.v?b:a);
-  const bigP = r.blocks.reduce((a,b)=>b.pv>a.pv?b:a);
-  const sc   = r.blocks[2];
-  $("blockNote").innerHTML =
-      `FLOPs 上最贵的是 <b>${big.k}（${pct(big.v/r.F)}）</b>，参数上最贵的是 <b>${bigP.k}（${pct(bigP.pv/r.P)}）</b>`
-    + (big.k===bigP.k ? "——这次是同一块。" : "——<b>不是同一块</b>。")
-    + `<br><b>两端各有一个极端</b>：<code>token_embeddings</code> 占 ${pct(r.blocks[0].pv/r.P)} 的参数却是 `
-    + `<b>0 FLOPs</b>（查表）；<code>Attention 打分</code> 占 ${pct(sc.v/r.F)} 的 FLOPs 却是 `
-    + `<b>0 参数</b>（激活×激活，没有权重）。`
-    + `<br>同样一份 V·d，<code>lm_head</code> 那份要真做矩阵乘，<code>token_embeddings</code> 那份不用——`
-    + `所以词表在小模型上是算力负担、在大模型上只是显存负担：切到 <b>GPT-2 small</b>，`
-    + `lm_head 独占 27% 的前向 FLOPs；到了 <b>XL</b> 只剩 4.7%。`
-    + `<br>打分与投影的比值是 <code>T·d_q / (d·(d_q+d_kv)) = ${fmt(T*dq/(d*(dq+dkv)),3)}</code>——<b>层数完全约掉了</b>。`;
+  // 第 3 段（六大块对比）已删除，但下面的说明还要用这两个量：
+  // blocks[2] = 注意力打分（0 参数、有 FLOPs），blocks[0] = token_embeddings（有参数、0 FLOPs）
+  const big = r.blocks.reduce((a,b)=>b.v>a.v?b:a);
 
   // ── 四、训练一步 ──
   const stepF = 3*r.F, optF = 14*r.P;
@@ -1408,8 +1371,10 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
                                       .filter(o=>o.v > 0);
   stack($("barParamMem"), null, paint(2, x=>x[2]));
   stack($("barAct"),      null, paint(4, x=>x[4]));
-  // 图例只画一次：三条 bar 用的是同一套颜色，画三遍是重复
-  stack($("barMemAll"), $("legRows"), paint(0, memOf));
+  // 图例单独画：它要列全部 11 行。跟着某一条 bar 画的话，那条里为 0 的行会从图例里消失。
+  // 也不带百分比——两条 bar 的百分比不一样，精确数字在表里。
+  $("legRows").innerHTML = memRows.map((x,i)=>
+    `<span><i style="background:${ROWC[i%ROWC.length]}"></i>${x[0]}</span>`).join("");
   tbl($("tMem"),
     ["环节","参数 符号","参数量","占 P","S 符号","S 元素数","占 S","这行的显存","占训练显存"],
     memRows.map(x=>[x[0], x[1], x[2]?int(x[2]):"0", x[2]?pct(x[2]/r.P):"—",
@@ -1433,12 +1398,8 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
   const balance = p.peak/p.bw;              // TFLOP/s ÷ TB/s = FLOP/byte
   const gpu = Object.entries(GPUS).find(([,g]) =>
       g.vram === p.vram && Math.abs(g.bw - p.bw) < 0.02);
-  $("gpuDer").innerHTML = gpu
-    ? `<b>${gpu[0]}</b>　${gpu[1].mem}　带宽 ${fmt(gpu[1].bw,2)} TB/s<br>`
-      + `稠密峰值：tf32 <b>${N(gpu[1].tf32)}</b>　bf16 <b>${N(gpu[1].bf16)}</b>　`
-      + `fp8 <b>${N(gpu[1].fp8)}</b> TFLOP/s（点上面的按钮填的是 tf32）<br>`
-      + `机器平衡点 = 峰值/带宽 = <b>${fmt(balance,0)}</b> FLOP/byte`
-    : `峰值/带宽/显存可以随便改。机器平衡点 = 峰值/带宽 = <b>${fmt(balance,0)}</b> FLOP/byte`;
+  $("gpuDer").innerHTML = (gpu ? `<b>${gpu[0]}</b>　tf32 ${N(gpu[1].tf32)}　bf16 ${N(gpu[1].bf16)}　fp8 ${N(gpu[1].fp8)}<br>` : ``)
+    + `平衡点 ${fmt(balance,0)} FLOP/byte`;
   tbl($("tAI"), ["操作","FLOPs/元素","FLOPs","HBM 字节","AI","判定"],
     r.ai.map(a=>[a.k, a.sym, flops(a.f), bytes(a.b), fmt(a.v,1),
       a.v>balance?'<span class="tag ok">compute-bound</span>':'<span class="tag bad">memory-bound</span>']));
@@ -1452,8 +1413,22 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
     ` 解码时 T=1，投影的 AI 降到 <code>2d/((2+d)·bytes) ≈ ${fmt(decAI,2)}</code>，极度 memory-bound——这是自回归生成慢的根本原因。`;
 
   // ── 七、时间 ──
-  const eff    = p.peak*1e12*p.mfu*nGPU;             // 有效算力，FLOP/s
-  const perTok = 3*r.F/T;                            // 训一个 token 要多少 FLOPs（含注意力的 T²）
+  const perTok  = 3*r.F/T;              // 训一个 token 要多少 FLOPs —— 精确值，含注意力的 T²
+  const perTok6 = 6*r.P;                // 业界常用的 6P 近似：忽略 T²，又把 0 FLOPs 的 embedding 算了进去
+  const peakAll = p.peak*1e12*nGPU;     // 所有卡的峰值算力
+  // MFU 和实测 token/s 是同一件事的两种写法，改哪个哪个说了算
+  let mfu, tps;
+  if(mfuDriver === "tps"){
+    tps = Math.max(0, p.tps);
+    mfu = peakAll > 0 ? tps*perTok/peakAll : 0;
+    $("mfu").value = +mfu.toFixed(4);
+  }else{
+    mfu = Math.max(0, p.mfu);
+    tps = perTok > 0 ? mfu*peakAll/perTok : 0;
+    $("tps").value = Math.round(tps);
+  }
+  const mfu6 = peakAll > 0 ? tps*perTok6/peakAll : 0;   // 若按 6P 口径算出来的 MFU
+  const eff  = peakAll * mfu;                            // 有效算力，FLOP/s
   let D, sec;
   if(timeDriver === "days"){                         // 给定天数 → 反推能训多少 token
     sec = Math.max(0, p.days)*86400;
@@ -1467,8 +1442,9 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
   const steps = (p.tB*T) > 0 ? D/(p.tB*T) : 0;       // 步数是推出来的，不是填的
   const totalF = D*perTok;
   const approx6ND = 6*r.P*D;                          // 教科书的 6ND：忽略了注意力的 T² 项
+  $("mfuDer").innerHTML = `MFU ${pct(mfu)} ↔ ${int(tps)} token/s　（按 6P 算 ${pct(mfu6)}）`;
   $("twoWay").innerHTML = timeDriver === "days"
-    ? `当前是<b>按天数反推</b>：${fmt(p.days,1)} 天 × ${nGPU} 张卡 × ${fmt(p.peak*p.mfu,0)} TFLOP/s`
+    ? `当前是<b>按天数反推</b>：${fmt(p.days,1)} 天 × ${nGPU} 张卡 × ${fmt(p.peak*mfu,0)} TFLOP/s`
       + ` ⇒ 能训 <b>${cnt(D)}</b> tokens。改左边的「目标 token 数」就切回另一头。`
     : `当前是<b>按 token 预算算</b>：${cnt(D)} tokens ⇒ ${nGPU} 张卡要 <b>${durShort(sec)}</b>。`
       + ` 改左边的「训练天数」就切成反推 token 数。`;
@@ -1476,7 +1452,13 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
     ["总算力","3·F·D/T", flops(totalF)],
     ["训练步数","D / (batch·T)", int(steps)],
     ["6·N·D 近似","忽略注意力的 T²", flops(approx6ND)+`（低估 ${pct(1-approx6ND/totalF)}）`],
-    ["有效算力",`${fmt(p.peak,0)}×${p.mfu}×${nGPU} 卡`, fmt(p.peak*p.mfu*nGPU,0)+" TFLOP/s"],
+    ["实测 token/s","填的或由 MFU 推出", int(tps)],
+    ["每 token 成本","3·F/T（精确，含 T²）", flops(perTok)],
+    ["6·P 近似","忽略 T²、多算 embedding", flops(perTok6)
+      + `（${perTok6<perTok?"低":"高"} ${pct(Math.abs(1-perTok6/perTok))}）`],
+    ["MFU（精确口径）","token/s × 3F/T ÷ 峰值", pct(mfu)],
+    ["MFU（按 6P 算）","业界常用，会偏"+(perTok6<perTok?"低":"高"), pct(mfu6)],
+    ["有效算力",`${fmt(p.peak,0)}×${fmt(mfu,3)}×${nGPU} 卡`, fmt(p.peak*mfu*nGPU,0)+" TFLOP/s"],
     ["耗时",`${nGPU} 张卡`, dur(sec)],
     ["每个 token","3·F/T", flops(perTok)],
   ].map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v">${k[2]}</div><div class="s">${k[1]}</div></div>`).join("");
@@ -1489,21 +1471,15 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
 
   // ── token 预算：和参数量的比值 ──
   const Dtot = D, ratio = Dtot/r.P;
-  const verdict = ratio < 15 ? ["bad","欠训——还没到 Chinchilla 的算力最优点"]
-                : ratio < 40 ? ["ok","Chinchilla 附近（≈20× 是同等算力下 loss 最低的配比）"]
-                : ratio < 300 ? ["ok","过训——现在主流的做法，为了推理时更省"]
-                : ["ok","严重过训——Llama-3-8B 是 1875×，小模型灌大数据"];
+  const verdict = ratio < 15  ? ["bad","欠训"]
+                : ratio < 40  ? ["ok","≈Chinchilla"]
+                : ratio < 300 ? ["ok","过训（主流）"]
+                :               ["ok","严重过训"];
   $("batchDer").innerHTML =
-      `单卡 micro-batch <b>B = tB / (累积 × 卡数) = ${int(p.tB)} / (${int(accum)} × ${int(nGPU)}) = ${int(B)}</b><br>`
-    + `<span style="color:var(--muted)">B 决定显存里的 saved tensors；tB 决定训练总量。改上面任一个都会传导过来。</span>`
-    + (Math.abs(Braw - B) > 1e-9
-        ? `<br><span class="tag bad">对不齐</span> ${fmt(Braw,3)} 不是整数，已按 ${int(B)} 算——`
-          + `说明累积步数或卡数设多了/少了`
-        : ``);
+      `B = ${int(p.tB)} / (${int(accum)} × ${int(nGPU)}) = <b>${int(B)}</b>`
+    + (Math.abs(Braw - B) > 1e-9 ? `　<span class="tag bad">除不尽，按 ${int(B)} 算</span>` : ``);
   $("tokDer").innerHTML =
-      `D = <b>${cnt(Dtot)}</b> tokens　P = ${cnt(r.P)}<br>`
-    + `<b>D / P = ${fmt(ratio,0)}×</b>　<span class="tag ${verdict[0]}">${verdict[1]}</span><br>`
-    + `推出步数 = D/(batch·T) = <b>${int(steps)}</b>`;
+      `D = ${cnt(Dtot)} = <b>${fmt(ratio,0)}×P</b>　<span class="tag ${verdict[0]}">${verdict[1]}</span>`;
 
   // ── 上下文这根拖拽条：对数刻度，直接驱动全局 T ──
   const SLO = 6, SHI = 20;                                  // 2^6 = 64 到 2^20 ≈ 1M
@@ -1561,8 +1537,7 @@ ${p.attn==="mha"&&dq===d&&ff.gated&&Math.abs(dff-8/3*d)<64 ? "  MHA + d_q=d + �
   hd(0, `${N(L)}×${ATTN[p.attn]}+${ff.label} · 残差流 ${xd}`);
   hd(1, `${flops(r.F)} / 次前向 · ${flops(stepF)} / 步`);
   hd(2, `P=${cnt(r.P)} · ${bytes(total)} / ${int(p.vram)} GB`, total > vramB);
-  hd(3, `最贵：FLOPs ${big.k} ${pct(big.v/r.F)} · 参数 ${bigP.k} ${pct(bigP.pv/r.P)}`);
-  hd(4, `${durShort(sec)} · ${nGPU} 卡 · ${fmt(ratio,0)}×P tokens`);
+  hd(3, `${durShort(sec)} · ${nGPU} 卡 · ${fmt(ratio,0)}×P tokens`);
 }
 
 // 初始化
@@ -1601,6 +1576,8 @@ $("presets").addEventListener("click", e=>{
 });
 $("Dtok").addEventListener("input", ()=>timeDriver = "D");
 $("days").addEventListener("input", ()=>timeDriver = "days");
+$("mfu").addEventListener("input", ()=>mfuDriver = "mfu");
+$("tps").addEventListener("input", ()=>mfuDriver = "tps");
 IN.forEach(k=>$(k).addEventListener("input", render));
 $("ffn").addEventListener("change", render);
 // 注意力的下拉框只是改 n_kv 的快捷方式：真正决定变体的是 n_kv 本身
