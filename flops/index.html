@@ -319,18 +319,15 @@
         </div>
         <aside class="c-side">
           <p class="sidelab">怎么看这张图</p>
-          <p class="note"><b>盒子边长按 √元素数</b>，面积大致对应张量大小；比例是真的，但被开方压缩过。
-          真实维度写在盒子旁边，超上限的那一维画成撕裂边 <span style="font-family:var(--mono)">⌇</span>。
-          停在盒子上能看到精确元素数和字节数。</p>
-          <p class="note"><span class="tag ok">绿</span> 残差流与捷径　<span class="tag bad">橙</span> 含 T² 的张量<br>
-          <b>斜纹</b> = 权重（每层一份），实心 = saved tensor。</p>
-          <p class="note"><b>多头 = 往后摞起来的切片，一片一个头</b>（超过 6 个只画 6 片，真实头数标在右上角）。
-          每个头有固定颜色，从 Q/K/V 一路带到 ctx，再带到「拼接后」的对应一段——
-          <b>拼头就是把 h 片沿特征维接成一条</b>，接完宽度回到 <code>d_q</code> 才能喂给 W_o。</p>
-          <p class="note">每摞下面的细横杠是<b>拼接后有多宽</b>：GQA 下 K、V 只有 Q 的 n_kv/h，省的就是 KV cache。</p>
-          <p class="note"><b>绿色粗线是残差流</b>，中途分出的<b>捷径绕过整个子层</b>落到 ⊕，取的是
-          <b>进 RMSNorm 之前的原始 x</b>——归一化只作用在子层内部那一支，这就是 pre-norm。
-          橙色外框和回边表示<b>这两个子层重复 L 次</b>。</p>
+          <p class="note"><b>盒子边长按 √元素数</b>，比例是真的但被开方压缩过。超上限的那一维画成撕裂边
+          <span style="font-family:var(--mono)">⌇</span>。停在盒子上看精确元素数和字节数。</p>
+          <p class="note"><span class="tag ok">绿</span> 残差流与捷径　<span class="tag bad">橙</span> 含 T²　
+          <b>斜纹</b> = 权重，实心 = saved tensor。</p>
+          <p class="note"><b>多头 = 往后摞起来的切片，一片一个头</b>（超过 6 个只画 6 片）。每个头有固定颜色，
+          一路带到「拼接后」的对应一段——<b>拼头就是把 h 片沿特征维接成一条</b>，接完宽度回到 <code>d_q</code>。
+          摞下面的细横杠是拼接后的宽度，GQA 下 K、V 明显短一截。</p>
+          <p class="note"><b>捷径取的是进 RMSNorm 之前的原始 x</b>，归一化只作用在子层内部那一支——这就是 pre-norm。
+          橙色外框加回边 = 这两个子层重复 L 次。</p>
           <p class="note" id="archNote"></p>
         </aside>
       </div>
@@ -353,11 +350,9 @@ x[T,d_in] @ W[d_in,d_out]  =  <b>2 · token数 · 参数量</b></div>
         <aside class="c-side">
           <p class="sidelab">读这张表</p>
           <p class="note">矩阵乘每个输出元素是一次长度 n 的点积 = n 乘 + n 加，所以是 <b>2mnp</b>。
-          推论：<b>数完参数量就等于数完了 FLOPs</b>——但只对带权重的行成立。</p>
-          <p class="note"><b>零 FLOPs 的行同样值得看</b>：归一化、RoPE、softmax、残差加、拼头，
-          全是逐元素或换布局，一次乘法都不做。</p>
-          <p class="note">只有 <code>Q@Kᵀ</code> 和 <code>scores@V</code> 让 T 出现两次——<b>那是 T² 的唯一来源</b>，
-          下面「上下文拉长」整节都在算它。</p>
+          推论：<b>数完参数量就等于数完 FLOPs</b>——但只对带权重的行成立。</p>
+          <p class="note"><b>零 FLOPs 的行同样值得看</b>：归一化、RoPE、softmax、残差加、拼头全是逐元素或换布局。
+          只有 <code>Q@Kᵀ</code> 和 <code>scores@V</code> 让 T 出现两次——<b>T² 的唯一来源</b>。</p>
         </aside>
       </div>
 
@@ -370,9 +365,8 @@ AdamW 一步 ≈ <b>14·P</b></div>
         </div>
         <aside class="c-side">
           <p class="sidelab">为什么是 3×</p>
-          <p class="note">反向 ≈ 2 × 前向：每个权重矩阵反向要算两次——<b>对输入的梯度</b>和<b>对权重的梯度</b>。</p>
-          <p class="note">AdamW 是逐元素的：缩放、两次滑动平均、开方、除法、累加，约 14 次运算。
-          <b>优化器的算力可以忽略，它的代价全在显存上</b>——见第 2 段。</p>
+          <p class="note">反向 ≈ 2 × 前向：每个权重矩阵反向要算两次——<b>对输入的梯度</b>和<b>对权重的梯度</b>。
+          AdamW 是逐元素的约 14 次运算，<b>算力可以忽略，代价全在显存</b>（第 2 段）。</p>
         </aside>
       </div>
 
@@ -412,32 +406,22 @@ AdamW 一步 ≈ <b>14·P</b></div>
           <div class="kpis" id="kMem"></div>
         </div>
         <aside class="c-side">
-          <p class="sidelab">显存的三笔账</p>
-          <p class="note"><b>常驻 4P</b>：参数、梯度、AdamW 的 m 和 v，各一份。<b>和 batch、T 都无关</b>，训练全程占着。</p>
-          <p class="note"><b>saved tensors S</b>：<b>前向过程中产生、且反向求梯度时还要用到、因此必须留在显存里的
-          每一个张量</b>。这个名字来自 PyTorch —— <code>ctx.save_for_backward(...)</code> 存的、
-          <code>ctx.saved_tensors</code> 取出来的就是它。<br>
-          <b>本页不叫「激活值」</b>：那个译名会让人以为和激活函数有关，其实没关系——矩阵乘的输出、
-          softmax 的输出、归一化的输出全算，<code>scores</code> 那个 [B,h,T,T] 也算，
-          尽管它不过任何激活函数。<b>也不叫 checkpoint</b>：在这个领域
-          <i>gradient / activation checkpointing</i> 指的正好相反的事——只留少数几个点、其余全扔掉反向时重算。</p>
-          <p class="note">为什么非留不可：对 <code>Y = X @ W</code>，<code>∂L/∂W = Xᵀ @ ∂L/∂Y</code>——
-          <b>算权重的梯度必须有当初喂进去的 X</b>。逐元素的同理：softmax 反向要它的<b>输出</b>，
-          SiLU 要<b>输入</b>，<code>a ⊙ b</code> 两个都要（这就是门控 FFN 要留 4 个张量的原因）。</p>
-          <p class="note">生命周期只在前向到反向之间。但<b>反向要等整个前向跑完才开始</b>，
-          所以前向留下的东西会<b>同时</b>堆着——这才是它成为天花板的原因。
-          它<b>和 B·T 成正比</b>（打分矩阵还是 T 的平方），而参数一点不随 B、T 变。</p>
-          <p class="note">也正因为能重算，它是<b>唯一可以用算力换掉的那部分</b>：梯度重计算多花约 30% 算力
-          换掉大半 saved tensors；FlashAttention 干脆不物化 [B,h,T,T]。参数没法这么处理——它没地方重算出来。</p>
-          <p class="note"><b>KV cache</b>：只有推理有。训练一次算完整个序列，不需要缓存历史 K/V。</p>
-          <p class="sidelab" style="margin-top:14px">全局 batch 怎么进到这里</p>
-          <p class="note"><code>全局 batch tB = 单卡 micro-batch B × 梯度累积步数 × 卡数</code>。
-          <b>决定显存的是 B，不是 tB</b>——一次前向只处理 B 条序列，累积和数据并行都不增加同时驻留的激活。
-          但 tB 通过这条链传导过来：<b>改 tB、卡数、累积步数中的任何一个，B 都会变，这一段的数就跟着变</b>。</p>
+          <p class="sidelab">三笔账</p>
+          <p class="note"><b>常驻 4P</b>　参数 + 梯度 + AdamW 的 m、v，各一份。和 batch、T 无关，全程占着。<br>
+          <b>saved tensors S</b>　前向留下、反向要用的张量。随 <code>B·T</code> 涨，打分矩阵随 <code>T²</code>。<br>
+          <b>KV cache</b>　只有推理有。</p>
+          <p class="sidelab" style="margin-top:14px">S 为什么留、又为什么能扔</p>
+          <p class="note">对 <code>Y = XW</code>，<code>∂L/∂W = Xᵀ·∂L/∂Y</code>——算权重梯度得有当初的 X。
+          反向要等前向<b>全部</b>跑完，所以这些张量会同时堆着，这才是它成为天花板的原因。<br>
+          但它<b>能重算</b>：梯度重计算多花约 30% 算力换掉大半，FlashAttention 干脆不物化 <code>[B,h,T,T]</code>。
+          4P 没这个余地。</p>
+          <p class="note" style="font-size:11.5px">名字取自 PyTorch 的 <code>ctx.save_for_backward</code>。
+          不叫「激活值」——和激活函数没关系，矩阵乘、softmax、归一化的输出全算；
+          也不叫 checkpoint——那个词在这里指的是相反的操作。</p>
+          <p class="sidelab" style="margin-top:14px">batch 怎么进来</p>
+          <p class="note"><code>tB = B × 累积 × 卡数</code>。<b>决定显存的是 B</b>，累积和数据并行都不增加同时驻留的量。
+          但改 tB / 卡数 / 累积中任一个，B 都会变。</p>
           <p class="note" id="fitNote"></p>
-          <p class="note">默认这组是一个能跑的配置：<b>8 张卡 × 累积 64 × 单卡 2 条</b> = 全局 1024。
-          想回到笔记 §5.4 那个「单卡、B=1」的口径，点左边的
-          <b>还原笔记口径</b>——那组算出来的 42.62 GB 是<b>一条序列</b>的账，不是一次真实训练步的账。</p>
           <p class="note" id="kvNote"></p>
           <p class="note" id="paramCheck"></p>
         </aside>
@@ -459,19 +443,10 @@ AdamW 一步 ≈ <b>14·P</b></div>
         </div>
         <aside class="c-side">
           <p class="sidelab">一行 = 一个环节</p>
-          <p class="note">一行三个口径：<b>参数量</b>（模型本身）、<b>S 元素数</b>（前向留下、反向要用），
-          以及<b>这行真正吃掉的显存</b>。三列各自合到 100%。</p>
-          <p class="note">最后一列才是能直接横向比的：<code>显存 = bytes·(4×参数 + 激活)</code>——
-          <b>参数按 4 份算</b>（自己 + 梯度 + AdamW 的 m 和 v），<b>saved tensors 按 1 份</b>。
-          同样 1 个元素，<b>权重比 saved tensors 贵 4 倍</b>。</p>
-          <p class="note">权重不随 batch、不随 T 变；中间结果随 <code>B·T</code> 变。
-          一个形状 <code>[in, out]</code> 的权重作用在 <code>B·T</code> 个 token 上，产出 <code>B·T·out</code> 个元素——
-          <b>比值就是 B·T / d</b>。</p>
+          <p class="note">左半是它的<b>权重</b>，右半是它前向留下的<b>张量</b>，最后两列是这行真正吃掉的显存
+          （<code>bytes·(4×参数 + saved)</code>——权重按 4 份算，saved 按 1 份）。三个百分比各自合到 100%。</p>
+          <p class="note">权重不随 B、T 变；saved 随 <code>B·T</code> 变，比值就是 <code>B·T / d</code>。</p>
           <p class="note" id="ratioNote"></p>
-          <p class="note"><b>归属口径</b>：表里把每个 saved tensor 记在<b>产出它的那个算子</b>名下
-          （<code>q_proj</code> 那行记的是 <code>Q</code> 的大小）。而链式法则真正要留的是<b>该算子的输入</b>。
-          这两种归法<b>总量相同</b>——在一条链上，前一个的输出就是后一个的输入——只是行与行之间差一格。</p>
-          <p class="sidelab" style="margin-top:14px">两边的零最值得看</p>
           <p class="note" id="actNote"></p>
         </aside>
       </div>
@@ -495,12 +470,9 @@ AdamW 一步 ≈ <b>14·P</b></div>
           <p class="note" id="twoWay"></p>
           <p class="note" id="timeNote"></p>
           <p class="sidelab" style="margin-top:14px">MFU 怎么来的</p>
-          <p class="note"><b>MFU = 实际用掉的算力 ÷ 峰值算力</b>。把日志里的 token/s 填进左边，
-          这里就反推出 MFU；反过来填 MFU 也能推出理论上该跑多少 token/s。</p>
-          <p class="note">换算的桥是<b>每个 token 要多少 FLOPs</b>。业界常用 <code>6·P</code>：
-          前向 2P（每个参数一乘一加）+ 反向 4P（对输入的梯度 2P、对权重的梯度 2P）。
-          <b>本页用的是精确值 3·F/T</b>——<code>6P</code> 忽略了注意力那两项 T²，
-          又把 0 FLOPs 的 embedding 参数算了进去。两个数都列在左边，差多少一目了然。</p>
+          <p class="note"><b>MFU = 实际用掉的算力 ÷ 峰值</b>。填 token/s 反推 MFU，填 MFU 反推 token/s。
+          换算的桥是每 token 多少 FLOPs：业界常用 <code>6·P</code>，<b>本页用精确的 <code>3·F/T</code></b>——
+          6P 忽略了注意力的 T²、又把 0 FLOPs 的 embedding 算了进去。两个数都列在左边。</p>
         </aside>
       </div>
 
@@ -1386,13 +1358,11 @@ KV cache = bytes · <b>2·L·B·T·d_kv</b>     只有推理有，训练不需�
 
   const kvMHA = bpe*2*L*B*T*dq;
   $("kvNote").innerHTML =
-    `<b>KV cache 是推理时的账，训练时没有</b>——训练一次算完整个序列，不需要缓存历史 K/V。`
-    + ` 当前 ${ATTN[p.attn]} 下是 <b>${bytes(r.kvCache)}</b>`
-    + (p.attn==="mha"
-        ? `。把注意力换成 GQA 或 MQA，这个数会按 n_kv/h 缩小，而上面的saved tensors 和 FLOPs 几乎不动——`
-          + `<b>这就是 GQA 唯一的动机</b>。`
-        : `，同尺寸 MHA 是 ${bytes(kvMHA)}，省了 <b>${fmt(d/dkv,2)}×</b>。`
-          + ` 注意上表的"打分矩阵"一项<b>没有跟着变小</b>——${ATTN[p.attn]} 不动那里。`);
+      `当前 ${ATTN[p.attn]} 的 KV cache <b>${bytes(r.kvCache)}</b>`
+    + (p.attn === "mha"
+        ? `。换成 GQA / MQA 会按 n_kv/h 缩小，而 saved tensors 和 FLOPs 几乎不动——<b>这就是 GQA 的全部动机</b>。`
+        : `，同尺寸 MHA 是 ${bytes(kvMHA)}，省 ${fmt(dq/dkv,2)}×。注意打分矩阵那行<b>没跟着小</b>。`);
+
 
   // ── 六、AI ──
   const balance = p.peak/p.bw;              // TFLOP/s ÷ TB/s = FLOP/byte
