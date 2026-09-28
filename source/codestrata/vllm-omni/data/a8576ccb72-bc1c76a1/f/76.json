@@ -1,0 +1,1 @@
+{"file":"vllm_omni/benchmarks/patch/__init__.py","pkg":"vllm_omni.benchmarks.patch.__init__","lang":"python","lang_label":"Python","n_lines":4,"symbols":[],"outline_kind":"ast","xref":{"toks":[[3,14,19,1361,2]],"targets":{"1361":["m:vllm_omni.benchmarks.patch.patch",["vllm_omni/benchmarks/patch/patch.py",1]]}}}

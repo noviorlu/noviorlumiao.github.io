@@ -1,0 +1,1 @@
+{"file":"vllm_omni/model_extras/sana_video.py","pkg":"vllm_omni.model_extras.sana_video","lang":"python","lang_label":"Python","n_lines":11,"symbols":[],"outline_kind":"ast","xref":{"toks":[[4,0,28,50783,3]],"targets":{"50783":["v:vllm_omni.model_extras.sana_video:SANA_VIDEO_EXTRA_BODY_PARAMS",["vllm_omni/model_extras/sana_video.py",4]]}}}

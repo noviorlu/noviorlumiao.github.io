@@ -1,0 +1,1 @@
+{"file":"vllm_omni/diffusion/distributed/csrc/a2a_permute.cu","pkg":"vllm_omni.diffusion.distributed.csrc","lang":"cuda","lang_label":"C++ · CUDA","n_lines":269,"symbols":[{"key":"","n":"copy_rows","k":"func","l":33},{"key":"","n":"guard","k":"func","l":172}],"outline_kind":"lexer","xref":{"toks":[],"targets":{}}}
